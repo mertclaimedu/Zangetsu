@@ -23,7 +23,6 @@ local animationStages = {
     climb = {name = "Climb", id = ""},
     swim = {name = "Swim", id = ""}
 }
-local defaultAnimations = {}  -- Tabelle für Standard-Animationen
 local selectedAnimStage = nil
 local lastSelectedPreset = nil
 local menuTransparency = 0.1
@@ -1039,44 +1038,11 @@ local applyBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 30), Position
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = applyBtn})
 applyBtn.MouseButton1Click:Connect(applyCustomAnimations)
 
--- Reset-Button hinzufügen
-local resetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 30), Position = UDim2.new(0.5, -60, 0, stageOffset + 45), BackgroundColor3 = colors.Interface, Text = "Reset to Default", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animStagesFrame})
-create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = resetBtn})
-resetBtn.MouseButton1Click:Connect(function()
-    if defaultAnimations.idle1 then
-        -- Standard-Animationen anwenden
-        applyAnimation(defaultAnimations.idle1, defaultAnimations.idle2 or defaultAnimations.idle1, defaultAnimations.walk, defaultAnimations.run, defaultAnimations.jump, defaultAnimations.climb, defaultAnimations.fall)
-        -- animationStages auf Standard zurücksetzen
-        animationStages.idle.id = defaultAnimations.idle1
-        animationStages.walk.id = defaultAnimations.walk
-        animationStages.run.id = defaultAnimations.run
-        animationStages.jump.id = defaultAnimations.jump
-        animationStages.climb.id = defaultAnimations.climb
-        animationStages.fall.id = defaultAnimations.fall
-        animationStages.swim.id = defaultAnimations.swim or defaultAnimations.idle1
-        -- UI-Textboxen aktualisieren
-        for stage, info in pairs(animationStages) do
-            for _, child in pairs(animStagesFrame:GetChildren()) do
-                if child:IsA("Frame") then
-                    local stageName = child:FindFirstChildOfClass("TextLabel")
-                    if stageName and stageName.Text == info.name then
-                        local idInput = child:FindFirstChildOfClass("TextBox")
-                        if idInput then idInput.Text = info.id end
-                        break
-                    end
-                end
-            end
-        end
-    else
-        warn("Default animations not found!")
-    end
-end)
-
 local animButtons = {
     {"Vampire", "1083445855", "1083450166", "1083473930", "1083462077", "1083455352", "1083439238", "1083443587"},
     {"Hero", "616111295", "616113536", "616122287", "616117076", "616115533", "616104706", "616108001"},
     {"Zombie Classic", "616158929", "616160636", "616168032", "616163682", "616161997", "616156119", "616157476"},
-    {"Mage " .. utf8.char(10024), "707742142", "707855907", "707897309", "707861613", "707853694", "707826056", "707829716"},
+    {"Mage", "707742142", "707855907", "707897309", "707861613", "707853694", "707826056", "707829716"},
     {"Ghost", "616006778", "616008087", "616010382", "616013216", "616008936", "616003713", "616005863"},
     {"Elder", "845397899", "845400520", "845403856", "845386501", "845398858", "845392038", "845396048"},
     {"Levitation", "616006778", "616008087", "616013216", "616010382", "616008936", "616003713", "616005863"},
@@ -1093,7 +1059,7 @@ local animButtons = {
     {"Princess", "941003647", "941013098", "941028902", "941015281", "941008832", "940996062", "941000007"},
     {"Cowboy", "1014390418", "1014398616", "1014421541", "1014401683", "1014394726", "1014380606", "1014384571"},
     {"Patrol", "1149612882", "1150842221", "1151231493", "1150967949", "1150944216", "1148811837", "1148863382"},
-    {"FE Zombie", "3489171152", "3489171152", "3489174223", "3489173414", "616season161997", "616156119", "616157476"}
+    {"FE Zombie", "3489171152", "3489171152", "3489174223", "3489173414", "616161997", "616156119", "616157476"}
 }
 
 for _, anim in pairs(animButtons) do
@@ -1131,7 +1097,7 @@ for _, anim in pairs(animButtons) do
     end)
 end
 
-animationsTab.CanvasSize = UDim2.new(0, 0, 0, stageOffset + 500)  -- CanvasSize angepasst für neuen Button
+animationsTab.CanvasSize = UDim2.new(0, 0, 0, stageOffset + 460)
 
 addKeybind("Menu", keybinds.Menu, 0)
 addKeybind("Aimlock", keybinds.Aimlock, 30)
@@ -1286,34 +1252,6 @@ local function updateCharacter(c)
         bodyGyro.Parent = rootPart
     end
     if espTracerActive then updateESP() end
-    -- Standard-Animationen speichern, falls noch nicht geschehen
-    if not next(defaultAnimations) and c:FindFirstChild("Animate") then
-        local Animate = c.Animate
-        if Animate.idle and Animate.idle:FindFirstChild("Animation1") then
-            defaultAnimations.idle1 = Animate.idle.Animation1.AnimationId:match("%d+")
-        end
-        if Animate.idle and Animate.idle:FindFirstChild("Animation2") then
-            defaultAnimations.idle2 = Animate.idle.Animation2.AnimationId:match("%d+")
-        end
-        if Animate.walk and Animate.walk:FindFirstChild("WalkAnim") then
-            defaultAnimations.walk = Animate.walk.WalkAnim.AnimationId:match("%d+")
-        end
-        if Animate.run and Animate.run:FindFirstChild("RunAnim") then
-            defaultAnimations.run = Animate.run.RunAnim.AnimationId:match("%d+")
-        end
-        if Animate.jump and Animate.jump:FindFirstChild("JumpAnim") then
-            defaultAnimations.jump = Animate.jump.JumpAnim.AnimationId:match("%d+")
-        end
-        if Animate.climb and Animate.climb:FindFirstChild("ClimbAnim") then
-            defaultAnimations.climb = Animate.climb.ClimbAnim.AnimationId:match("%d+")
-        end
-        if Animate.fall and Animate.fall:FindFirstChild("FallAnim") then
-            defaultAnimations.fall = Animate.fall.FallAnim.AnimationId:match("%d+")
-        end
-        if Animate.swim and Animate.swim:FindFirstChild("Swim") then
-            defaultAnimations.swim = Animate.swim.Swim.AnimationId:match("%d+")
-        end
-    end
 end
 player.CharacterAdded:Connect(updateCharacter)
 if player.Character then updateCharacter(player.Character) end
