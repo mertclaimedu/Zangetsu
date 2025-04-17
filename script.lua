@@ -3,7 +3,7 @@ local Services = {
 	Players = game:GetService("Players"),
 	Lighting = game:GetService("Lighting"),
 	TweenService = game:GetService("TweenService"),
-	UserInputService = game:GetService("UserInputService"),  
+	UserInputService = game:GetService("UserInputService"),
 	RunService = game:GetService("RunService")
 }
 
@@ -57,8 +57,6 @@ local States = {
 	aimlockLocked = false,
 	espHighlights = {},
 	espNames = {},
-	espBoxes = {},
-	espTracers = {},
 	keybinds = {
 		Menu = Enum.KeyCode.G,
 		Aimlock = Enum.KeyCode.Q,
@@ -100,10 +98,9 @@ local States = {
 	selectedAnimStage = nil,
 	lastSelectedPreset = nil,
 	menuTransparency = 0.1,
-	espBoxActive = false,
-	espTracerActive = false,
 	bodyVelocity = nil,
-	bodyGyro = nil
+	bodyGyro = nil,
+	randomTargetActive = false
 }
 
 -- Group colors
@@ -168,8 +165,8 @@ end
 local function PlayAnim(id, time, speed)
 	pcall(function()
 		local hum = PlayerData.humanoid
-		local animtrack = hum:GetPlayingAnimationTracks()
-		for _, track in pairs(animtrack) do track:Stop() end
+		if not hum then return end
+		for _, track in pairs(hum:GetPlayingAnimationTracks()) do track:Stop() end
 		local Anim = Instance.new("Animation")
 		Anim.AnimationId = "rbxassetid://" .. id
 		local loadanim = hum:LoadAnimation(Anim)
@@ -177,14 +174,17 @@ local function PlayAnim(id, time, speed)
 		loadanim.TimePosition = time
 		loadanim:AdjustSpeed(speed)
 		loadanim.Stopped:Connect(function()
-			for _, track in pairs(animtrack) do track:Stop() end
+			for _, track in pairs(hum:GetPlayingAnimationTracks()) do track:Stop() end
 		end)
 	end)
 end
 
 local function StopAnim()
-	local animtrack = PlayerData.humanoid:GetPlayingAnimationTracks()
-	for _, track in pairs(animtrack) do track:Stop() end
+	pcall(function()
+		if PlayerData.humanoid then
+			for _, track in pairs(PlayerData.humanoid:GetPlayingAnimationTracks()) do track:Stop() end
+		end
+	end)
 end
 
 -- Initialize GUI
@@ -376,78 +376,58 @@ local function getTargetInFOV()
 	return c
 end
 
--- Updates ESP visuals for other players
+-- Optimized ESP system
+local function applyESPToPlayer(p)
+	if p ~= PlayerData.player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+		if not States.espHighlights[p] then
+			local h = Instance.new("Highlight")
+			h.FillColor = Colors.ESP
+			h.FillTransparency = 0.7
+			h.OutlineColor = Colors.ESP
+			h.OutlineTransparency = 0
+			h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			h.Parent = p.Character
+			States.espHighlights[p] = h
+		end
+		if not States.espNames[p] then
+			local ng = create("BillboardGui", {Size = UDim2.new(0, 100, 0, 50), StudsOffset = Vector3.new(0, 3, 0), Adornee = p.Character:WaitForChild("Head"), AlwaysOnTop = true, Parent = p.Character})
+			create("TextLabel", {Size = UDim2.new(1, 0, 1, 0), Text = p.Name, TextColor3 = Colors.ESP, TextSize = 14, BackgroundTransparency = 1, Font = Enum.Font.FredokaOne, Parent = ng})
+			States.espNames[p] = ng
+		end
+		if States.espHighlights[p] then States.espHighlights[p].Enabled = true end
+		if States.espNames[p] then States.espNames[p].Enabled = true end
+	end
+end
+
 local function updateESP()
 	if not States.espActive then
 		for p, h in pairs(States.espHighlights) do if h then h:Destroy() end States.espHighlights[p] = nil end
 		for p, n in pairs(States.espNames) do if n then n:Destroy() end States.espNames[p] = nil end
-		for p, b in pairs(States.espBoxes) do if b then b:Destroy() end States.espBoxes[p] = nil end
-		for p, t in pairs(States.espTracers) do if t then t:Destroy() end States.espTracers[p] = nil end
 		return
 	end
 	local currentPlayers = {}
 	for _, p in pairs(Services.Players:GetPlayers()) do
 		if p ~= PlayerData.player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
 			currentPlayers[p] = true
-			if not States.espHighlights[p] then
-				local h = Instance.new("Highlight")
-				h.FillColor = Colors.ESP
-				h.FillTransparency = 0.7
-				h.OutlineColor = Colors.ESP
-				h.OutlineTransparency = 0
-				h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-				h.Parent = p.Character
-				States.espHighlights[p] = h
-			end
-			if not States.espNames[p] then
-				local ng = create("BillboardGui", {Size = UDim2.new(0, 100, 0, 50), StudsOffset = Vector3.new(0, 3, 0), Adornee = p.Character:WaitForChild("Head"), AlwaysOnTop = true, Parent = p.Character})
-				create("TextLabel", {Size = UDim2.new(1, 0, 1, 0), Text = p.Name, TextColor3 = Colors.ESP, TextSize = 14, BackgroundTransparency = 1, Font = Enum.Font.FredokaOne, Parent = ng})
-				States.espNames[p] = ng
-			end
-			if States.espBoxActive and not States.espBoxes[p] then
-				local b = Instance.new("BoxHandleAdornment")
-				b.Size = Vector3.new(5, 5, 5)
-				b.Color3 = Colors.ESP
-				b.Transparency = 0.7
-				b.AlwaysOnTop = true
-				b.Adornee = p.Character.HumanoidRootPart
-				b.Parent = p.Character
-				States.espBoxes[p] = b
-			end
-			if States.espTracerActive and PlayerData.rootPart and not States.espTracers[p] then
-				local t = Instance.new("Beam")
-				t.Color = ColorSequence.new(Colors.ESP)
-				t.Width0 = 0.2
-				t.Width1 = 0.2
-				t.Transparency = NumberSequence.new(0.3)
-				t.Attachment0 = create("Attachment", {Parent = PlayerData.rootPart})
-				t.Attachment1 = create("Attachment", {Parent = p.Character.HumanoidRootPart})
-				t.Parent = PlayerData.rootPart
-				States.espTracers[p] = t
-			end
-			if States.espHighlights[p] then States.espHighlights[p].Enabled = true end
-			if States.espNames[p] then States.espNames[p].Enabled = true end
-			if States.espBoxes[p] then States.espBoxes[p].Visible = States.espBoxActive end
-			if States.espTracers[p] then States.espTracers[p].Enabled = States.espTracerActive end
+			applyESPToPlayer(p)
 		end
 	end
 	for p in pairs(States.espHighlights) do
 		if not currentPlayers[p] then
 			if States.espHighlights[p] then States.espHighlights[p]:Destroy() end
 			if States.espNames[p] then States.espNames[p]:Destroy() end
-			if States.espBoxes[p] then States.espBoxes[p]:Destroy() end
-			if States.espTracers[p] then States.espTracers[p]:Destroy() end
 			States.espHighlights[p] = nil
 			States.espNames[p] = nil
-			States.espBoxes[p] = nil
-			States.espTracers[p] = nil
 		end
 	end
 end
 
 Services.Players.PlayerAdded:Connect(function(p)
 	CachedData.cachedPlayers = Services.Players:GetPlayers()
-	if States.espActive then updateESP() end
+	p.CharacterAdded:Connect(function()
+		if States.espActive then applyESPToPlayer(p) end
+	end)
+	if States.espActive then applyESPToPlayer(p) end
 end)
 
 Services.Players.PlayerRemoving:Connect(function(p)
@@ -455,15 +435,13 @@ Services.Players.PlayerRemoving:Connect(function(p)
 	if States.espHighlights[p] then
 		States.espHighlights[p]:Destroy() States.espHighlights[p] = nil
 		if States.espNames[p] then States.espNames[p]:Destroy() States.espNames[p] = nil end
-		if States.espBoxes[p] then States.espBoxes[p]:Destroy() States.espBoxes[p] = nil end
-		if States.espTracers[p] then States.espTracers[p]:Destroy() States.espTracers[p] = nil end
 	end
 end)
 
 task.spawn(function()
 	while true do
 		if States.espActive then updateESP() end
-		task.wait(5)
+		task.wait(3)
 	end
 end)
 
@@ -473,10 +451,6 @@ addSlider("Time", 0, 24, OriginalSettings.ClockTime, 80, function(v) Services.Li
 local ef, et = addToggle("ESP", false, 120, function(on) States.espActive = on updateESP() end, visualsTab)
 local cb = create("TextButton", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0.55, 0, 0, 10), BackgroundColor3 = Colors.ESP, Text = "Color", TextColor3 = Colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = ef})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = cb})
-local function boxTextUpdater(b, s) b.Text = s and "Unbox" or "Box" end
-local boxBtn, boxToggle = addButton("Box", 40, 125, function(s) States.espBoxActive = s updateESP() end, visualsTab, false, 60, boxTextUpdater)
-local function tracerTextUpdater(b, s) b.Text = s and "Untrace" or "Trace" end
-local tracerBtn, tracerToggle = addButton("Trace", 110, 125, function(s) States.espTracerActive = s updateESP() end, visualsTab, false, 60, tracerTextUpdater)
 addToggle("Infinite Zoom", false, 160, function(on) PlayerData.player.CameraMaxZoomDistance = on and 1000000 or OriginalSettings.MaxZoom end, visualsTab)
 addToggle("Wallhack", false, 200, function(on)
 	States.wallhackActive = on
@@ -512,7 +486,6 @@ visualsTab.CanvasSize = UDim2.new(0, 0, 0, 290)
 
 local csf, cst
 local ff, flyToggle
--- Speed toggle (formerly CFrameSpeed)
 csf, cst = addToggle("Speed", false, 0, function(on)
 	if not PlayerData.rootPart then return end
 	States.cframeSpeedActive = on
@@ -526,7 +499,6 @@ csi.FocusLost:Connect(function(e)
 		if v then States.cframeSpeedValue = math.clamp(v, 50, 50000) end
 	end
 end)
--- Fly toggle
 ff, flyToggle = addToggle("Fly", false, 40, function(on)
 	if not PlayerData.rootPart or not PlayerData.humanoid then return end
 	States.flyActive = on
@@ -584,20 +556,6 @@ end)
 addToggle("Noclip", false, 120, function(on) States.noclipActive = on end, playerTab)
 addToggle("Click Teleport", false, 160, function(on) States.clickTeleportActive = on end, playerTab)
 addVoiceChatUnban(200, playerTab)
-local antiFlingActive = false
-local antiFlingBtn, antiFlingToggle = addToggle("Anti Fling", false, 240, function(on)
-	antiFlingActive = on
-	if on then
-		Services.RunService.RenderStepped:Connect(function()
-			if antiFlingActive and PlayerData.rootPart then
-				local velocity = PlayerData.rootPart.Velocity
-				if velocity.Magnitude > 500 then
-					PlayerData.rootPart.Velocity = Vector3.new(0, velocity.Y, 0)
-				end
-			end
-		end)
-	end
-end, playerTab)
 local rejoinBtn = addActionButton("Rejoin", 10, 320, function()
 	game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, PlayerData.player)
 end, playerTab, 120)
@@ -625,7 +583,70 @@ local jerkBtn = addActionButton("Jerk", 270, 320, function()
 	local jerkScript = loadstring(game:HttpGet(scriptUrl))
 	if jerkScript then jerkScript() end
 end, playerTab, 120)
-playerTab.CanvasSize = UDim2.new(0, 0, 0, 370)
+
+-- Add Join Friend and Join functionality to playerTab
+local joinFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 100), Position = UDim2.new(0, 0, 0, 360), BackgroundTransparency = 1, Parent = playerTab})
+create("TextLabel", {Size = UDim2.new(0, 100, 0, 20), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Join Player:", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
+local joinInput = create("TextBox", {Size = UDim2.new(0, 150, 0, 20), Position = UDim2.new(0, 120, 0, 0), BackgroundColor3 = Colors.Button, Text = "", PlaceholderText = "Username or UserID", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinInput})
+local joinBtn = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(0, 280, 0, 0), BackgroundColor3 = Colors.Interface, Text = "Join", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinBtn})
+local joinFriendBtn = create("TextButton", {Size = UDim2.new(0, 100, 0, 20), Position = UDim2.new(0, 10, 0, 30), BackgroundColor3 = Colors.Button, Text = "Join Friend", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinFriendBtn})
+local friendListFrame = create("ScrollingFrame", {Size = UDim2.new(0, 200, 0, 100), Position = UDim2.new(0, 120, 0, 30), BackgroundColor3 = Colors.Background, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new(0, 0, 0, 0), Visible = false, Parent = joinFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = friendListFrame})
+
+local function populateFriendList()
+	friendListFrame:ClearAllChildren()
+	local friendsOnline = PlayerData.player:GetFriendsOnline()
+	local yOffset = 0
+	for _, friend in pairs(friendsOnline) do
+		if friend.IsOnline and friend.PlaceId and friend.GameId then
+			local friendBtn = create("TextButton", {Size = UDim2.new(1, -10, 0, 20), Position = UDim2.new(0, 5, 0, yOffset), BackgroundColor3 = Colors.Button, Text = friend.UserName, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = friendListFrame})
+			create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = friendBtn})
+			friendBtn.MouseButton1Click:Connect(function()
+				joinInput.Text = friend.UserName
+				friendListFrame.Visible = false
+			end)
+			yOffset = yOffset + 25
+		end
+	end
+	friendListFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset)
+end
+
+joinFriendBtn.MouseButton1Click:Connect(function()
+	friendListFrame.Visible = not friendListFrame.Visible
+	if friendListFrame.Visible then
+		populateFriendList()
+	end
+end)
+
+joinBtn.MouseButton1Click:Connect(function()
+	local input = joinInput.Text
+	if input == "" then return end
+	local userId
+	if tonumber(input) then
+		userId = tonumber(input)
+	else
+		pcall(function()
+			userId = Services.Players:GetUserIdFromNameAsync(input)
+		end)
+	end
+	if not userId then
+		notify("Error", "Invalid username or userId.", 5)
+		return
+	end
+	local friendsOnline = PlayerData.player:GetFriendsOnline()
+	for _, friend in pairs(friendsOnline) do
+		if friend.VisitorId == userId and friend.PlaceId and friend.GameId then
+			game:GetService("TeleportService"):TeleportToPlaceInstance(friend.PlaceId, friend.GameId, PlayerData.player)
+			return
+		end
+	end
+	notify("Error", "Player not found or not in a game.", 5)
+end)
+
+playerTab.CanvasSize = UDim2.new(0, 0, 0, 470)
 
 local af, at = addToggle("Aimlock", false, 0, function(on) States.aimlockActive = on if not on then States.lockedTarget = nil States.aimlockLocked = false end end, combatTab)
 local asf = create("Frame", {Size = UDim2.new(1, 0, 0, 200), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = combatTab})
@@ -673,27 +694,9 @@ local targetImage = create("ImageLabel", {Size = UDim2.new(0, 100, 0, 100), Posi
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = targetImage})
 local userInfoLabel = create("TextLabel", {Size = UDim2.new(0, 200, 0, 75), Position = UDim2.new(0, 120, 0, 50), BackgroundTransparency = 1, Text = "UserID: \nDisplay: \nJoined: ", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = targetTab})
 
-local predictionIndicator = nil
-local targetPredictionFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 130), BackgroundTransparency = 1, Parent = targetTab})
-create("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Target Prediction", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = targetPredictionFrame})
-local targetPredictionToggle, targetPredictionUpdate = addToggle("", false, 0, function(on)
-	States.predictionActive = on
-	States.targetActive = on
-	if predictionIndicator then predictionIndicator:Destroy() predictionIndicator = nil end
-	if on and States.targetedPlayer and States.targetedPlayer.Character then
-		local targetRoot = States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart")
-		if targetRoot then
-			predictionIndicator = Instance.new("Highlight")
-			predictionIndicator.FillColor = Color3.fromRGB(255, 0, 0)
-			predictionIndicator.OutlineColor = Color3.fromRGB(255, 0, 0)
-			predictionIndicator.FillTransparency = 0.7
-			predictionIndicator.OutlineTransparency = 0.3
-			predictionIndicator.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-			predictionIndicator.Adornee = States.targetedPlayer.Character
-			predictionIndicator.Parent = States.targetedPlayer.Character
-		end
-	end
-end, targetPredictionFrame)
+local predictionToggleFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 130), BackgroundTransparency = 1, Parent = targetTab})
+create("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Movement Prediction", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = predictionToggleFrame})
+local predictionToggle, predictionUpdate = addToggle("", false, 0, function(on) States.predictionActive = on end, predictionToggleFrame)
 
 local viewActive = false
 local viewBtn, viewToggle = addButton("View", 10, 160, function(s)
@@ -731,7 +734,12 @@ local headsitBtn, headsitToggle = addButton("Headsit", 10, 200, function(s)
 				while headsitActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("Head") then
 						PlayerData.humanoid.Sit = true
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.Head.CFrame * CFrame.new(0, 2, 0)
+						local targetPos = States.targetedPlayer.Character.Head.CFrame * CFrame.new(0, 2, 0)
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						PlayerData.rootPart.Velocity = Vector3.new(0, 0, 0)
 						task.wait()
 					else
@@ -755,7 +763,12 @@ local standBtn, standToggle = addButton("Stand", 140, 200, function(s)
 			task.spawn(function()
 				while standActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(-3, 1, 0)
+						local targetPos = States.targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(-3, 1, 0)
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						PlayerData.rootPart.Velocity = Vector3.new(0, 0, 0)
 						task.wait()
 					else
@@ -780,7 +793,12 @@ local bangBtn, bangToggle = addButton("Bang", 10, 240, function(s)
 			task.spawn(function()
 				while bangActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.1)
+						local targetPos = States.targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.1)
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						PlayerData.rootPart.Velocity = Vector3.new(0, 0, 0)
 						task.wait()
 					else
@@ -816,7 +834,12 @@ local flingBtn, flingToggle = addButton("Fling", 140, 240, function(s)
 			task.spawn(function()
 				while flingActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.HumanoidRootPart.CFrame
+						local targetPos = States.targetedPlayer.Character.HumanoidRootPart.CFrame
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						task.wait()
 					else
 						task.wait()
@@ -852,7 +875,12 @@ local backpackBtn, backpackToggle = addButton("Backpack", 10, 280, function(s)
 				while backpackActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
 						PlayerData.humanoid.Sit = true
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.2) * CFrame.Angles(0, -3, 0)
+						local targetPos = States.targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.2) * CFrame.Angles(0, -3, 0)
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						PlayerData.rootPart.Velocity = Vector3.new(0, 0, 0)
 						task.wait()
 					else
@@ -876,7 +904,12 @@ local doggyBtn, doggyToggle = addButton("Doggy", 140, 280, function(s)
 			task.spawn(function()
 				while doggyActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("LowerTorso") then
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.LowerTorso.CFrame * CFrame.new(0, 0.23, 0)
+						local targetPos = States.targetedPlayer.Character.LowerTorso.CFrame * CFrame.new(0, 0.23, 0)
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						PlayerData.rootPart.Velocity = Vector3.new(0, 0, 0)
 						task.wait()
 					else
@@ -901,7 +934,12 @@ local dragBtn, dragToggle = addButton("Drag", 10, 320, function(s)
 			task.spawn(function()
 				while dragActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("RightHand") then
-						PlayerData.rootPart.CFrame = States.targetedPlayer.Character.RightHand.CFrame * CFrame.new(0, -2.5, 1) * CFrame.Angles(-2, -3, 0)
+						local targetPos = States.targetedPlayer.Character.RightHand.CFrame * CFrame.new(0, -2.5, 1) * CFrame.Angles(-2, -3, 0)
+						if States.predictionActive then
+							local vel = States.targetedPlayer.Character.HumanoidRootPart.Velocity
+							targetPos = targetPos + vel * (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000)
+						end
+						PlayerData.rootPart.CFrame = targetPos
 						PlayerData.rootPart.Velocity = Vector3.new(0, 0, 0)
 						task.wait()
 					else
@@ -930,6 +968,27 @@ local whitelistBtn = addActionButton("Whitelist", 140, 320, function()
 		end
 	end
 end, targetTab, 120)
+
+local randomTargetToggle, randomTargetUpdate = addToggle("Random Target", false, 360, function(on)
+	States.randomTargetActive = on
+	if on then
+		task.spawn(function()
+			while States.randomTargetActive do
+				local players = Services.Players:GetPlayers()
+				if #players > 1 then
+					local randomPlayer = players[math.random(1, #players)]
+					if randomPlayer ~= PlayerData.player then
+						States.targetedPlayer = randomPlayer
+						targetInput.Text = randomPlayer.Name
+						targetImage.Image = Services.Players:GetUserThumbnailAsync(randomPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+						userInfoLabel.Text = ("UserID: %d\nDisplay: %s\nJoined: %s"):format(randomPlayer.UserId, randomPlayer.DisplayName, os.date("%d-%m-%Y", os.time() - randomPlayer.AccountAge * 24 * 3600))
+					end
+				end
+				task.wait(1)
+			end
+		end)
+	end
+end, targetTab)
 
 targetInput.FocusLost:Connect(function()
 	local inputText = targetInput.Text:lower()
@@ -974,13 +1033,13 @@ clickTargetBtn.MouseButton1Click:Connect(function()
 	end)
 	GetTargetTool.Parent = PlayerData.player.Backpack
 end)
-targetTab.CanvasSize = UDim2.new(0, 0, 0, 370)
+targetTab.CanvasSize = UDim2.new(0, 0, 0, 400)
 
--- Applies preset animations to the character
+-- Animation functions
 local function applyAnimation(idle1, idle2, walk, run, jump, climb, fall)
 	pcall(function()
 		local Animate = PlayerData.character:FindFirstChild("Animate")
-		if not Animate then warn("Animate script not found in character!") return end
+		if not Animate then return end
 		Animate.Disabled = true
 		StopAnim()
 		local animation1 = Animate.idle:FindFirstChild("Animation1")
@@ -1001,7 +1060,6 @@ local function applyAnimation(idle1, idle2, walk, run, jump, climb, fall)
 	end)
 end
 
--- Checks if an animation ID is valid
 local function isValidAnimationId(id)
 	if id == "" then return false end
 	local success, info = pcall(function()
@@ -1010,14 +1068,12 @@ local function isValidAnimationId(id)
 	return success and info and info.AssetTypeId == 24
 end
 
--- Applies custom animations with fallback to default if ID is invalid
 local function applyCustomAnimations()
 	pcall(function()
 		local Animate = PlayerData.character:FindFirstChild("Animate")
-		if not Animate then warn("Animate script not found in character!") return end
+		if not Animate then return end
 		Animate.Disabled = true
 		StopAnim()
-		-- Idle
 		local idleId = States.animationStages.idle.id
 		if idleId ~= "" and isValidAnimationId(idleId) then
 			local animation1 = Animate.idle:FindFirstChild("Animation1")
@@ -1030,7 +1086,6 @@ local function applyCustomAnimations()
 			local animation2 = Animate.idle:FindFirstChild("Animation2")
 			if animation2 then animation2.AnimationId = DefaultAnimations.idle2 end
 		end
-		-- Run
 		local runId = States.animationStages.run.id
 		if runId ~= "" and isValidAnimationId(runId) then
 			local runAnim = Animate.run:FindFirstChild("RunAnim")
@@ -1039,7 +1094,6 @@ local function applyCustomAnimations()
 			local runAnim = Animate.run:FindFirstChild("RunAnim")
 			if runAnim then runAnim.AnimationId = DefaultAnimations.run end
 		end
-		-- Walk
 		local walkId = States.animationStages.walk.id
 		if walkId ~= "" and isValidAnimationId(walkId) then
 			local walkAnim = Animate.walk:FindFirstChild("WalkAnim")
@@ -1048,7 +1102,6 @@ local function applyCustomAnimations()
 			local walkAnim = Animate.walk:FindFirstChild("WalkAnim")
 			if walkAnim then walkAnim.AnimationId = DefaultAnimations.walk end
 		end
-		-- Jump
 		local jumpId = States.animationStages.jump.id
 		if jumpId ~= "" and isValidAnimationId(jumpId) then
 			local jumpAnim = Animate.jump:FindFirstChild("JumpAnim")
@@ -1057,7 +1110,6 @@ local function applyCustomAnimations()
 			local jumpAnim = Animate.jump:FindFirstChild("JumpAnim")
 			if jumpAnim then jumpAnim.AnimationId = DefaultAnimations.jump end
 		end
-		-- Fall
 		local fallId = States.animationStages.fall.id
 		if fallId ~= "" and isValidAnimationId(fallId) then
 			local fallAnim = Animate.fall:FindFirstChild("FallAnim")
@@ -1066,7 +1118,6 @@ local function applyCustomAnimations()
 			local fallAnim = Animate.fall:FindFirstChild("FallAnim")
 			if fallAnim then fallAnim.AnimationId = DefaultAnimations.fall end
 		end
-		-- Climb
 		local climbId = States.animationStages.climb.id
 		if climbId ~= "" and isValidAnimationId(climbId) then
 			local climbAnim = Animate.climb:FindFirstChild("ClimbAnim")
@@ -1075,7 +1126,6 @@ local function applyCustomAnimations()
 			local climbAnim = Animate.climb:FindFirstChild("ClimbAnim")
 			if climbAnim then climbAnim.AnimationId = DefaultAnimations.climb end
 		end
-		-- Swim
 		local swimId = States.animationStages.swim.id
 		if swimId ~= "" and isValidAnimationId(swimId) then
 			local swimAnim = Animate.swim:FindFirstChild("SwimAnim")
@@ -1324,9 +1374,27 @@ local function createColorSlider(l, min, max, y, cb)
 	end)
 	return f
 end
-local hf = createColorSlider("H", 0, 360, 30, function(v) Colors.ESP = Color3.fromHSV(v / 360, Colors.ESP:ToHSV()) cp.BackgroundColor3 = Colors.ESP cb.BackgroundColor3 = Colors.ESP updateESP() end)
-local sf = createColorSlider("S", 0, 1, 60, function(v) local h = Colors.ESP:ToHSV() Colors.ESP = Color3.fromHSV(h, v, select(3, Colors.ESP:ToHSV())) cp.BackgroundColor3 = Colors.ESP cb.BackgroundColor3 = Colors.ESP updateESP() end)
-local vf = createColorSlider("V", 0, 1, 90, function(v) local h, s = Colors.ESP:ToHSV() Colors.ESP = Color3.fromHSV(h, s, v) cp.BackgroundColor3 = Colors.ESP cb.BackgroundColor3 = Colors.ESP updateESP() end)
+local hf = createColorSlider("H", 0, 360, 30, function(v)
+	local _, s, vOld = Colors.ESP:ToHSV()
+	Colors.ESP = Color3.fromHSV(v / 360, s, vOld)
+	cp.BackgroundColor3 = Colors.ESP
+	cb.BackgroundColor3 = Colors.ESP
+	updateESP()
+end)
+local sf = createColorSlider("S", 0, 1, 60, function(v)
+	local h, _, vOld = Colors.ESP:ToHSV()
+	Colors.ESP = Color3.fromHSV(h, v, vOld)
+	cp.BackgroundColor3 = Colors.ESP
+	cb.BackgroundColor3 = Colors.ESP
+	updateESP()
+end)
+local vf = createColorSlider("V", 0, 1, 90, function(v)
+	local h, s = Colors.ESP:ToHSV()
+	Colors.ESP = Color3.fromHSV(h, s, v)
+	cp.BackgroundColor3 = Colors.ESP
+	cb.BackgroundColor3 = Colors.ESP
+	updateESP()
+end)
 local function openColorPicker()
 	if cpf.Visible then cpf.Visible = false else
 		cpf.Visible = true
@@ -1346,21 +1414,16 @@ tabs["Visuals"].BackgroundColor3 = Colors.TabSelected
 tabContents["Visuals"].Visible = true
 
 local function isBindDown(bind)
-	if bind == nil then return false end
-	if bind:IsA("KeyCode") then return Services.UserInputService:IsKeyDown(bind)
-	elseif bind:IsA("UserInputType") then
-		if bind == Enum.UserInputType.MouseButton1 or bind == Enum.UserInputType.MouseButton2 or bind == Enum.UserInputType.MouseButton3 then
-			return Services.UserInputService:IsMouseButtonPressed(bind)
-		end
-	end
+	if not bind then return false end
+	if bind:IsA("KeyCode") then return Services.UserInputService:IsKeyDown(bind) end
+	if bind:IsA("UserInputType") then return Services.UserInputService:IsMouseButtonPressed(bind) end
 	return false
 end
 
 local function isBindPressed(bind, input)
-	if bind == nil then return false end
-	if bind:IsA("KeyCode") then return input.KeyCode == bind
-	elseif bind:IsA("UserInputType") then return input.UserInputType == bind
-	end
+	if not bind then return false end
+	if bind:IsA("KeyCode") then return input.KeyCode == bind end
+	if bind:IsA("UserInputType") then return input.UserInputType == bind end
 	return false
 end
 
@@ -1448,7 +1511,6 @@ local function updateCharacter(c)
 		States.bodyGyro.D = 100
 		States.bodyGyro.Parent = PlayerData.rootPart
 	end
-	if States.espTracerActive then updateESP() end
 end
 PlayerData.player.CharacterAdded:Connect(updateCharacter)
 if PlayerData.player.Character then updateCharacter(PlayerData.player.Character) end
@@ -1519,12 +1581,4 @@ Services.UserInputService.InputChanged:Connect(function(i)
 	end
 end)
 
-local m = PlayerData.player:GetMouse()
-m.Button1Down:Connect(function()
-	if States.clickTeleportActive and States.keybinds.ClickTeleport and isBindDown(States.keybinds.ClickTeleport) and PlayerData.rootPart then
-		local targetPos = m.Hit.Position + Vector3.new(0, 3, 0)
-		local cameraLook = PlayerData.camera.CFrame.LookVector
-		local yaw = math.atan2(-cameraLook.X, -cameraLook.Z)
-		PlayerData.rootPart.CFrame = CFrame.new(targetPos) * CFrame.Angles(0, yaw, 0)
-	end
-end)
+local m = PlayerData.player
