@@ -27,9 +27,11 @@ local OriginalSettings = {
 
 -- Group effects
 local Effects = {
-	colorCorrection = Services.Lighting:FindFirstChild("CustomColorCorrection") or Instance.new("ColorCorrectionEffect", Services.Lighting)
+	colorCorrection = Services.Lighting:FindFirstChild("CustomColorCorrection") or Instance.new("ColorCorrectionEffect", Services.Lighting),
+	bloom = Services.Lighting:FindFirstChild("Bloom") or Instance.new("BloomEffect", Services.Lighting)
 }
 Effects.colorCorrection.Name = "CustomColorCorrection"
+Effects.bloom.Name = "Bloom"
 
 -- Store default animations for fallback
 local DefaultAnimations = {
@@ -62,9 +64,9 @@ local States = {
 		Aimlock = Enum.KeyCode.Q,
 		ESP = Enum.KeyCode.J,
 		ClickTeleport = Enum.KeyCode.E,
-		Fly = Enum.KeyCode.X,
+		Fly = nil,
 		FreeCam = Enum.KeyCode.P,
-		Speed = Enum.KeyCode.C
+		Speed = nil
 	},
 	aimlockFOV = 150,
 	showFOVCone = false,
@@ -77,6 +79,8 @@ local States = {
 	freeCamActive = false,
 	noclipActive = false,
 	clickTeleportActive = false,
+	spinActive = false,
+	spinSpeedValue = 5,
 	freeCamPosition = nil,
 	freeCamYaw = 0,
 	freeCamPitch = 0,
@@ -100,7 +104,8 @@ local States = {
 	menuTransparency = 0.1,
 	bodyVelocity = nil,
 	bodyGyro = nil,
-	randomTargetActive = false
+	randomTargetActive = false,
+	savedPositions = {}
 }
 
 -- Group colors
@@ -194,7 +199,13 @@ create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = mainFrame})
 create("UIGradient", {Color = ColorSequence.new(Color3.fromRGB(20, 20, 40), Color3.fromRGB(50, 50, 80)), Rotation = 45, Parent = mainFrame})
 local header = create("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = Colors.Header, Parent = mainFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = header})
-create("TextLabel", {Size = UDim2.new(0.7, 0, 0, 40), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Settings", TextColor3 = Colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = header})
+create("TextLabel", {Size = UDim2.new(0.7, 0, 0, 40), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Zangetsu", TextColor3 = Colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = header})
+
+-- Stats Display
+local fpsLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.45, 0, -0.2, 0), BackgroundTransparency = 1, Text = "FPS: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
+local pingLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.55, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Ping: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
+local playersLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.7, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Players: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
+
 local tabFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = mainFrame})
 create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 5), Parent = tabFrame})
 local tabs, tabContents = {}, {}
@@ -448,6 +459,7 @@ end)
 addSlider("Saturation", -1, 2, 0, 0, function(v) if v ~= Effects.colorCorrection.Saturation then Effects.colorCorrection.Saturation = v end end, visualsTab, false, false)
 addSlider("FOV", 30, 120, 70, 40, function(v) if v ~= PlayerData.camera.FieldOfView then PlayerData.camera.FieldOfView = v end end, visualsTab, false, true)
 addSlider("Time", 0, 24, OriginalSettings.ClockTime, 80, function(v) Services.Lighting.ClockTime = v end, visualsTab, false, false)
+addSlider("Bloom Intensity", 0, 10, Effects.bloom.Intensity, 280, function(v) Effects.bloom.Intensity = v end, visualsTab, false, false)
 local ef, et = addToggle("ESP", false, 120, function(on) States.espActive = on updateESP() end, visualsTab)
 local cb = create("TextButton", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0.55, 0, 0, 10), BackgroundColor3 = Colors.ESP, Text = "Color", TextColor3 = Colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = ef})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = cb})
@@ -482,7 +494,7 @@ addToggle("Low Texture", false, 240, function(on)
 		end
 	end
 end, visualsTab)
-visualsTab.CanvasSize = UDim2.new(0, 0, 0, 290)
+visualsTab.CanvasSize = UDim2.new(0, 0, 0, 330)
 
 local csf, cst
 local ff, flyToggle
@@ -554,12 +566,52 @@ fcsi.FocusLost:Connect(function(e)
 	end
 end)
 addToggle("Noclip", false, 120, function(on) States.noclipActive = on end, playerTab)
-addToggle("Click Teleport", false, 160, function(on) States.clickTeleportActive = on end, playerTab)
-addVoiceChatUnban(200, playerTab)
-local rejoinBtn = addActionButton("Rejoin", 10, 320, function()
+addToggle("Click to Teleport", false, 160, function(on) States.clickTeleportActive = on end, playerTab)
+addToggle("Spin", false, 200, function(on) States.spinActive = on end, playerTab)
+addSlider("Spin Speed", 0, 100, 5, 240, function(v) States.spinSpeedValue = v end, playerTab, false, false)
+addVoiceChatUnban(280, playerTab)
+
+-- Saved Positions Feature
+local savePosBtn = addActionButton("Save Position", 10, 320, function()
+	if not PlayerData.rootPart then return end
+	local posName = "Position " .. (#States.savedPositions + 1)
+	table.insert(States.savedPositions, {name = posName, position = PlayerData.rootPart.Position})
+	populateSavedPositions()
+end, playerTab, 120)
+
+local selectPosBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, 320), BackgroundColor3 = Colors.Button, Text = "Select Position", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = playerTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = selectPosBtn})
+
+local savedPosListFrame = create("ScrollingFrame", {Size = UDim2.new(0, 200, 0, 100), Position = UDim2.new(0, 140, 0, 350), BackgroundColor3 = Colors.Background, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new(0, 0, 0, 0), Visible = false, Parent = playerTab})
+create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = savedPosListFrame})
+
+selectPosBtn.MouseButton1Click:Connect(function()
+	savedPosListFrame.Visible = not savedPosListFrame.Visible
+	if savedPosListFrame.Visible then
+		populateSavedPositions()
+	end
+end)
+
+local function populateSavedPositions()
+	savedPosListFrame:ClearAllChildren()
+	local yOffset = 0
+	for i, pos in pairs(States.savedPositions) do
+		local posBtn = create("TextButton", {Size = UDim2.new(1, -10, 0, 20), Position = UDim2.new(0, 5, 0, yOffset), BackgroundColor3 = Colors.Button, Text = pos.name, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = savedPosListFrame})
+		create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = posBtn})
+		posBtn.MouseButton1Click:Connect(function()
+			if not PlayerData.rootPart then return end
+			PlayerData.rootPart.CFrame = CFrame.new(pos.position)
+			savedPosListFrame.Visible = false
+		end)
+		yOffset = yOffset + 25
+	end
+	savedPosListFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset)
+end
+
+local rejoinBtn = addActionButton("Rejoin", 10, 360, function()
 	game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, PlayerData.player)
 end, playerTab, 120)
-local serverHopBtn = addActionButton("Server Hop", 140, 320, function()
+local serverHopBtn = addActionButton("Server Hop", 140, 360, function()
 	if CachedData.httprequest then
 		local servers = {}
 		local req = CachedData.httprequest({ Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId) })
@@ -576,16 +628,22 @@ local serverHopBtn = addActionButton("Server Hop", 140, 320, function()
 		end
 	end
 end, playerTab, 120)
-local jerkBtn = addActionButton("Jerk", 270, 320, function()
+local jerkBtn = addActionButton("Jerk", 270, 360, function()
 	if not PlayerData.character then return end
 	local isR6 = PlayerData.character:FindFirstChild("Torso") ~= nil
 	local scriptUrl = isR6 and "https://pastefy.app/wa3v2Vgm/raw" or "https://pastefy.app/YZoglOyJ/raw"
-	local jerkScript = loadstring(game:HttpGet(scriptUrl))
-	if jerkScript then jerkScript() end
+	local success, jerkScript = pcall(function()
+		return loadstring(game:HttpGet(scriptUrl))
+	end)
+	if success and jerkScript then
+		jerkScript()
+	else
+		notify("Error", "Failed to load jerk script.", 5)
+	end
 end, playerTab, 120)
 
 -- Add Join Friend and Join functionality to playerTab
-local joinFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 100), Position = UDim2.new(0, 0, 0, 360), BackgroundTransparency = 1, Parent = playerTab})
+local joinFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 100), Position = UDim2.new(0, 0, 0, 400), BackgroundTransparency = 1, Parent = playerTab})
 create("TextLabel", {Size = UDim2.new(0, 100, 0, 20), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Join Player:", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
 local joinInput = create("TextBox", {Size = UDim2.new(0, 150, 0, 20), Position = UDim2.new(0, 120, 0, 0), BackgroundColor3 = Colors.Button, Text = "", PlaceholderText = "Username or UserID", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinInput})
@@ -646,7 +704,7 @@ joinBtn.MouseButton1Click:Connect(function()
 	notify("Error", "Player not found or not in a game.", 5)
 end)
 
-playerTab.CanvasSize = UDim2.new(0, 0, 0, 470)
+playerTab.CanvasSize = UDim2.new(0, 0, 0, 510)
 
 local af, at = addToggle("Aimlock", false, 0, function(on) States.aimlockActive = on if not on then States.lockedTarget = nil States.aimlockLocked = false end end, combatTab)
 local asf = create("Frame", {Size = UDim2.new(1, 0, 0, 200), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = combatTab})
@@ -693,10 +751,6 @@ local clickTargetBtn = create("ImageButton", {Size = UDim2.new(0, 30, 0, 30), Po
 local targetImage = create("ImageLabel", {Size = UDim2.new(0, 100, 0, 100), Position = UDim2.new(0, 10, 0, 50), BackgroundColor3 = Colors.Background, Image = "rbxassetid://10818605405", Parent = targetTab})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = targetImage})
 local userInfoLabel = create("TextLabel", {Size = UDim2.new(0, 200, 0, 75), Position = UDim2.new(0, 120, 0, 50), BackgroundTransparency = 1, Text = "UserID: \nDisplay: \nJoined: ", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = targetTab})
-
-local predictionToggleFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 130), BackgroundTransparency = 1, Parent = targetTab})
-create("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Movement Prediction", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = predictionToggleFrame})
-local predictionToggle, predictionUpdate = addToggle("", false, 0, function(on) States.predictionActive = on end, predictionToggleFrame)
 
 local viewActive = false
 local viewBtn, viewToggle = addButton("View", 10, 160, function(s)
@@ -969,26 +1023,19 @@ local whitelistBtn = addActionButton("Whitelist", 140, 320, function()
 	end
 end, targetTab, 120)
 
-local randomTargetToggle, randomTargetUpdate = addToggle("Random Target", false, 360, function(on)
-	States.randomTargetActive = on
-	if on then
-		task.spawn(function()
-			while States.randomTargetActive do
-				local players = Services.Players:GetPlayers()
-				if #players > 1 then
-					local randomPlayer = players[math.random(1, #players)]
-					if randomPlayer ~= PlayerData.player then
-						States.targetedPlayer = randomPlayer
-						targetInput.Text = randomPlayer.Name
-						targetImage.Image = Services.Players:GetUserThumbnailAsync(randomPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
-						userInfoLabel.Text = ("UserID: %d\nDisplay: %s\nJoined: %s"):format(randomPlayer.UserId, randomPlayer.DisplayName, os.date("%d-%m-%Y", os.time() - randomPlayer.AccountAge * 24 * 3600))
-					end
-				end
-				task.wait(1)
-			end
-		end)
+local randomTargetBtn = addActionButton("Random Target", 10, 360, function()
+	local players = Services.Players:GetPlayers()
+	if #players > 1 then
+		local randomPlayer
+		repeat
+			randomPlayer = players[math.random(1, #players)]
+		until randomPlayer ~= PlayerData.player
+		States.targetedPlayer = randomPlayer
+		targetInput.Text = randomPlayer.Name
+		targetImage.Image = Services.Players:GetUserThumbnailAsync(randomPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+		userInfoLabel.Text = ("UserID: %d\nDisplay: %s\nJoined: %s"):format(randomPlayer.UserId, randomPlayer.DisplayName, os.date("%d-%m-%Y", os.time() - randomPlayer.AccountAge * 24 * 3600))
 	end
-end, targetTab)
+end, targetTab, 120)
 
 targetInput.FocusLost:Connect(function()
 	local inputText = targetInput.Text:lower()
@@ -1336,7 +1383,7 @@ animationsTab.CanvasSize = UDim2.new(0, 0, 0, stageOffset + 460)
 addKeybind("Menu", States.keybinds.Menu, 0)
 addKeybind("Aimlock", States.keybinds.Aimlock, 30)
 addKeybind("ESP", States.keybinds.ESP, 60)
-addKeybind("ClickTeleport", States.keybinds.ClickTeleport, 90)
+addKeybind("Click to Teleport", States.keybinds.ClickTeleport, 90)
 addKeybind("Fly", States.keybinds.Fly, 120)
 addKeybind("FreeCam", States.keybinds.FreeCam, 150)
 addKeybind("Speed", States.keybinds.Speed, 180)
@@ -1427,7 +1474,9 @@ local function isBindPressed(bind, input)
 	return false
 end
 
+local frameCount = 0
 Services.RunService.RenderStepped:Connect(function(dt)
+	frameCount = frameCount + 1
 	if not PlayerData.character or not PlayerData.rootPart then return end
 	local cf = PlayerData.camera.CFrame
 	if States.viewTarget then PlayerData.camera.CameraType = Enum.CameraType.Follow return end
@@ -1473,6 +1522,27 @@ Services.RunService.RenderStepped:Connect(function(dt)
 		for _, p in pairs(PlayerData.character:GetDescendants()) do
 			if p:IsA("BasePart") then p.CanCollide = false end
 		end
+	end
+	if States.spinActive then
+		local position = PlayerData.rootPart.Position
+		local currentCFrame = PlayerData.rootPart.CFrame
+		local pitch, yaw, roll = currentCFrame:ToEulerAnglesYXZ()
+		local spinSpeed = States.spinSpeedValue
+		yaw = yaw + spinSpeed * dt
+		local newRotation = CFrame.fromEulerAnglesYXZ(pitch, yaw, roll)
+		PlayerData.rootPart.CFrame = CFrame.new(position) * newRotation
+	end
+end)
+
+task.spawn(function()
+	while true do
+		wait(1)
+		fpsLabel.Text = "FPS: " .. frameCount
+		frameCount = 0
+		local ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
+		pingLabel.Text = "Ping: " .. math.floor(ping)
+		local playerCount = #Services.Players:GetPlayers()
+		playersLabel.Text = "Players: " .. playerCount
 	end
 end)
 
@@ -1537,48 +1607,95 @@ Services.UserInputService.InputBegan:Connect(function(i, gp)
 		if States.cframeSpeedActive then flyToggle(false) end
 	elseif States.keybinds.FreeCam and isBindPressed(States.keybinds.FreeCam, i) then fct(not States.freeCamActive)
 	elseif States.keybinds.Aimlock and isBindPressed(States.keybinds.Aimlock, i) and States.aimlockActive then
-		if States.aimlockToggleMode then States.aimlockLocked = not States.aimlockLocked else States.lockedTarget = getTargetInFOV() end
-	elseif States.freeCamActive and i.UserInputType == Enum.UserInputType.MouseButton2 then
-		r = true
-		Services.UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-	elseif i.KeyCode == Enum.KeyCode.LeftShift or i.KeyCode == Enum.KeyCode.RightShift then States.freeCamBoost = 2
-	elseif States.silentAimActive and i.UserInputType == Enum.UserInputType.MouseButton1 then
-		local currentTarget = getTargetInFOV()
-		if currentTarget then
-			local mp = Services.UserInputService:GetMouseLocation()
-			local nextTarget, md = nil, math.huge
-			for _, p in pairs(CachedData.cachedPlayers) do
-				if p ~= PlayerData.player and p ~= Services.Players:GetPlayerFromCharacter(currentTarget.Parent) then
-					local part = p.Character and p.Character:FindFirstChild(States.aimlockTargetPart == "Head" and "Head" or "HumanoidRootPart")
-					if part then
-						local pp, os = PlayerData.camera:WorldToViewportPoint(part.Position)
-						if os then
-							local d = (Vector2.new(pp.X, pp.Y) - mp).Magnitude
-							if d <= States.aimlockFOV and d < md then
-								nextTarget = part
-								md = d
-							end
-						end
-					end
-				end
+	elseif States.keybinds.Aimlock and isBindPressed(States.keybinds.Aimlock, i) and States.aimlockActive then
+		if States.aimlockToggleMode then
+			States.aimlockLocked = not States.aimlockLocked
+			if not States.aimlockLocked then
+				States.lockedTarget = nil
 			end
-			if nextTarget then
-				States.lockedTarget = nextTarget
-				local tp = States.predictionActive and predictTargetPosition(nextTarget, 0.1) or nextTarget.Position
-			end
+		end
+	elseif States.keybinds.ClickTeleport and isBindPressed(States.keybinds.ClickTeleport, i) and States.clickTeleportActive then
+		local mouse = PlayerData.player:GetMouse()
+		local hit = mouse.Hit
+		if hit then
+			PlayerData.rootPart.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+		end
+	end
+	if i.UserInputType == Enum.UserInputType.MouseButton1 and States.clickTeleportActive then
+		local mouse = PlayerData.player:GetMouse()
+		local hit = mouse.Hit
+		if hit then
+			PlayerData.rootPart.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+		end
+	end
+	if States.freeCamActive then
+		if i.UserInputType == Enum.UserInputType.MouseMovement then
+			States.freeCamYaw = States.freeCamYaw - i.Delta.X * States.freeCamSensitivity
+			States.freeCamPitch = math.clamp(States.freeCamPitch - i.Delta.Y * States.freeCamSensitivity, -math.pi / 2, math.pi / 2)
+		elseif i.UserInputType == Enum.UserInputType.MouseWheel then
+			States.freeCamBoost = math.clamp(States.freeCamBoost + i.Position.Z * 0.5, 0.5, 5)
 		end
 	end
 end)
-Services.UserInputService.InputEnded:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.MouseButton2 then r = false Services.UserInputService.MouseBehavior = Enum.MouseBehavior.Default end
-	if i.KeyCode == Enum.KeyCode.LeftShift or i.KeyCode == Enum.KeyCode.RightShift then States.freeCamBoost = 1 end
-	if States.keybinds.Aimlock and not States.aimlockToggleMode then States.lockedTarget = nil end
-end)
-Services.UserInputService.InputChanged:Connect(function(i)
-	if r and i.UserInputType == Enum.UserInputType.MouseMovement and not States.lockedTarget then
-		States.freeCamYaw = States.freeCamYaw - i.Delta.X * States.freeCamSensitivity
-		States.freeCamPitch = math.clamp(States.freeCamPitch - i.Delta.Y * States.freeCamSensitivity, -math.pi / 2, math.pi / 2)
+
+-- Cleanup on script end
+game:BindToClose(function()
+	if States.bodyVelocity then States.bodyVelocity:Destroy() end
+	if States.bodyGyro then States.bodyGyro:Destroy() end
+	if States.fovCone then States.fovCone:Destroy() end
+	for p, h in pairs(States.espHighlights) do if h then h:Destroy() end end
+	for p, n in pairs(States.espNames) do if n then n:Destroy() end end
+	if States.wallhackActive then
+		for p, t in pairs(OriginalSettings.Transparency) do
+			if p.Parent then p.Transparency = t end
+		end
+	end
+	if States.lowTextureActive then
+		for p, m in pairs(OriginalSettings.Materials) do
+			if p.Parent then p.Material = m end
+		end
+	end
+	Effects.colorCorrection.Saturation = 0
+	Effects.bloom.Intensity = 0
+	PlayerData.camera.FieldOfView = OriginalSettings.FOV
+	Services.Lighting.ClockTime = OriginalSettings.ClockTime
+	PlayerData.player.CameraMaxZoomDistance = OriginalSettings.MaxZoom
+	if PlayerData.humanoid then
+		PlayerData.humanoid.PlatformStand = false
+		PlayerData.humanoid.WalkSpeed = 16
+	end
+	if PlayerData.rootPart then
+		PlayerData.rootPart.Anchored = false
+	end
+	PlayerData.camera.CameraType = Enum.CameraType.Custom
+	if PlayerData.character then
+		PlayerData.camera.CameraSubject = PlayerData.character.Humanoid
+	end
+	local Animate = PlayerData.character and PlayerData.character:FindFirstChild("Animate")
+	if Animate then
+		Animate.Disabled = true
+		StopAnim()
+		local animation1 = Animate.idle:FindFirstChild("Animation1")
+		if animation1 then animation1.AnimationId = DefaultAnimations.idle1 end
+		local animation2 = Animate.idle:FindFirstChild("Animation2")
+		if animation2 then animation2.AnimationId = DefaultAnimations.idle2 end
+		local walkAnim = Animate.walk:FindFirstChild("WalkAnim")
+		if walkAnim then walkAnim.AnimationId = DefaultAnimations.walk end
+		local runAnim = Animate.run:FindFirstChild("RunAnim")
+		if runAnim then runAnim.AnimationId = DefaultAnimations.run end
+		local jumpAnim = Animate.jump:FindFirstChild("JumpAnim")
+		if jumpAnim then jumpAnim.AnimationId = DefaultAnimations.jump end
+		local climbAnim = Animate.climb:FindFirstChild("ClimbAnim")
+		if climbAnim then climbAnim.AnimationId = DefaultAnimations.climb end
+		local fallAnim = Animate.fall:FindFirstChild("FallAnim")
+		if fallAnim then fallAnim.AnimationId = DefaultAnimations.fall end
+		local swimAnim = Animate.swim:FindFirstChild("SwimAnim")
+		if swimAnim then swimAnim.AnimationId = DefaultAnimations.swimAnim end
+		local swimIdle = Animate.swim:FindFirstChild("SwimIdle")
+		if swimIdle then swimIdle.AnimationId = DefaultAnimations.swimIdle end
+		Animate.Disabled = false
 	end
 end)
 
-local m = PlayerData.player
+-- Notify user that the script has loaded
+notify("Skye", "Script loaded successfully.", 5)
