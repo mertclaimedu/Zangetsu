@@ -202,7 +202,7 @@ create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = header})
 create("TextLabel", {Size = UDim2.new(0.7, 0, 0, 40), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Zangetsu", TextColor3 = Colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = header})
 
 -- Stats Display
-local fpsLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.45, 0, -0.2, 0), BackgroundTransparency = 1, Text = "FPS: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
+local fpsLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.4, 0, -0.2, 0), BackgroundTransparency = 1, Text = "FPS: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
 local pingLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.55, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Ping: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
 local playersLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.7, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Players: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
 
