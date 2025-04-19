@@ -105,7 +105,7 @@ local States = {
 	bodyVelocity = nil,
 	bodyGyro = nil,
 	randomTargetActive = false,
-	savedPositions = {}
+	clickTeleportKeyHeld = false  -- Neu hinzugefügt für die Click-to-Teleport-Logik
 }
 
 -- Group colors
@@ -571,47 +571,12 @@ addToggle("Spin", false, 200, function(on) States.spinActive = on end, playerTab
 addSlider("Spin Speed", 0, 100, 5, 240, function(v) States.spinSpeedValue = v end, playerTab, false, false)
 addVoiceChatUnban(280, playerTab)
 
--- Saved Positions Feature
-local savePosBtn = addActionButton("Save Position", 10, 320, function()
-	if not PlayerData.rootPart then return end
-	local posName = "Position " .. (#States.savedPositions + 1)
-	table.insert(States.savedPositions, {name = posName, position = PlayerData.rootPart.Position})
-	populateSavedPositions()
-end, playerTab, 120)
+-- Entfernte "Save Position" und "Select Position" Buttons und Funktionen
 
-local selectPosBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, 320), BackgroundColor3 = Colors.Button, Text = "Select Position", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = playerTab})
-create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = selectPosBtn})
-
-local savedPosListFrame = create("ScrollingFrame", {Size = UDim2.new(0, 200, 0, 100), Position = UDim2.new(0, 140, 0, 350), BackgroundColor3 = Colors.Background, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new(0, 0, 0, 0), Visible = false, Parent = playerTab})
-create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = savedPosListFrame})
-
-selectPosBtn.MouseButton1Click:Connect(function()
-	savedPosListFrame.Visible = not savedPosListFrame.Visible
-	if savedPosListFrame.Visible then
-		populateSavedPositions()
-	end
-end)
-
-local function populateSavedPositions()
-	savedPosListFrame:ClearAllChildren()
-	local yOffset = 0
-	for i, pos in pairs(States.savedPositions) do
-		local posBtn = create("TextButton", {Size = UDim2.new(1, -10, 0, 20), Position = UDim2.new(0, 5, 0, yOffset), BackgroundColor3 = Colors.Button, Text = pos.name, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = savedPosListFrame})
-		create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = posBtn})
-		posBtn.MouseButton1Click:Connect(function()
-			if not PlayerData.rootPart then return end
-			PlayerData.rootPart.CFrame = CFrame.new(pos.position)
-			savedPosListFrame.Visible = false
-		end)
-		yOffset = yOffset + 25
-	end
-	savedPosListFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset)
-end
-
-local rejoinBtn = addActionButton("Rejoin", 10, 360, function()
+local rejoinBtn = addActionButton("Rejoin", 10, 320, function()
 	game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, PlayerData.player)
 end, playerTab, 120)
-local serverHopBtn = addActionButton("Server Hop", 140, 360, function()
+local serverHopBtn = addActionButton("Server Hop", 140, 320, function()
 	if CachedData.httprequest then
 		local servers = {}
 		local req = CachedData.httprequest({ Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId) })
@@ -628,7 +593,7 @@ local serverHopBtn = addActionButton("Server Hop", 140, 360, function()
 		end
 	end
 end, playerTab, 120)
-local jerkBtn = addActionButton("Jerk", 270, 360, function()
+local jerkBtn = addActionButton("Jerk", 270, 320, function()
 	if not PlayerData.character then return end
 	local isR6 = PlayerData.character:FindFirstChild("Torso") ~= nil
 	local scriptUrl = isR6 and "https://pastefy.app/wa3v2Vgm/raw" or "https://pastefy.app/YZoglOyJ/raw"
@@ -643,7 +608,7 @@ local jerkBtn = addActionButton("Jerk", 270, 360, function()
 end, playerTab, 120)
 
 -- Add Join Friend and Join functionality to playerTab
-local joinFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 100), Position = UDim2.new(0, 0, 0, 400), BackgroundTransparency = 1, Parent = playerTab})
+local joinFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 100), Position = UDim2.new(0, 0, 0, 360), BackgroundTransparency = 1, Parent = playerTab})
 create("TextLabel", {Size = UDim2.new(0, 100, 0, 20), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Join Player:", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
 local joinInput = create("TextBox", {Size = UDim2.new(0, 150, 0, 20), Position = UDim2.new(0, 120, 0, 0), BackgroundColor3 = Colors.Button, Text = "", PlaceholderText = "Username or UserID", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinInput})
@@ -703,8 +668,7 @@ joinBtn.MouseButton1Click:Connect(function()
 	end
 	notify("Error", "Player not found or not in a game.", 5)
 end)
-
-playerTab.CanvasSize = UDim2.new(0, 0, 0, 510)
+playerTab.CanvasSize = UDim2.new(0, 0, 0, 470)
 
 local af, at = addToggle("Aimlock", false, 0, function(on) States.aimlockActive = on if not on then States.lockedTarget = nil States.aimlockLocked = false end end, combatTab)
 local asf = create("Frame", {Size = UDim2.new(1, 0, 0, 200), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = combatTab})
@@ -1475,6 +1439,7 @@ local function isBindPressed(bind, input)
 end
 
 local frameCount = 0
+local lastTime = tick()
 Services.RunService.RenderStepped:Connect(function(dt)
 	frameCount = frameCount + 1
 	if not PlayerData.character or not PlayerData.rootPart then return end
@@ -1535,10 +1500,15 @@ Services.RunService.RenderStepped:Connect(function(dt)
 end)
 
 task.spawn(function()
+	local lastUpdate = tick()
 	while true do
-		wait(1)
-		fpsLabel.Text = "FPS: " .. frameCount
+		wait(0.5)
+		local currentTime = tick()
+		local elapsed = currentTime - lastUpdate
+		local fps = math.floor(frameCount / elapsed)
+		fpsLabel.Text = "FPS: " .. fps
 		frameCount = 0
+		lastUpdate = currentTime
 		local ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
 		pingLabel.Text = "Ping: " .. math.floor(ping)
 		local playerCount = #Services.Players:GetPlayers()
@@ -1607,21 +1577,17 @@ Services.UserInputService.InputBegan:Connect(function(i, gp)
 		if States.cframeSpeedActive then flyToggle(false) end
 	elseif States.keybinds.FreeCam and isBindPressed(States.keybinds.FreeCam, i) then fct(not States.freeCamActive)
 	elseif States.keybinds.Aimlock and isBindPressed(States.keybinds.Aimlock, i) and States.aimlockActive then
-	elseif States.keybinds.Aimlock and isBindPressed(States.keybinds.Aimlock, i) and States.aimlockActive then
 		if States.aimlockToggleMode then
 			States.aimlockLocked = not States.aimlockLocked
 			if not States.aimlockLocked then
 				States.lockedTarget = nil
 			end
 		end
-	elseif States.keybinds.ClickTeleport and isBindPressed(States.keybinds.ClickTeleport, i) and States.clickTeleportActive then
-		local mouse = PlayerData.player:GetMouse()
-		local hit = mouse.Hit
-		if hit then
-			PlayerData.rootPart.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
-		end
 	end
-	if i.UserInputType == Enum.UserInputType.MouseButton1 and States.clickTeleportActive then
+	if States.clickTeleportActive and isBindPressed(States.keybinds.ClickTeleport, i) then
+		States.clickTeleportKeyHeld = true
+	end
+	if States.clickTeleportActive and States.clickTeleportKeyHeld and i.UserInputType == Enum.UserInputType.MouseButton1 then
 		local mouse = PlayerData.player:GetMouse()
 		local hit = mouse.Hit
 		if hit then
@@ -1635,6 +1601,12 @@ Services.UserInputService.InputBegan:Connect(function(i, gp)
 		elseif i.UserInputType == Enum.UserInputType.MouseWheel then
 			States.freeCamBoost = math.clamp(States.freeCamBoost + i.Position.Z * 0.5, 0.5, 5)
 		end
+	end
+end)
+
+Services.UserInputService.InputEnded:Connect(function(i)
+	if States.clickTeleportActive and isBindPressed(States.keybinds.ClickTeleport, i) then
+		States.clickTeleportKeyHeld = false
 	end
 end)
 
