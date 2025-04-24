@@ -1,4 +1,3 @@
--- Group services into a table
 local Services = {
 	Players = game:GetService("Players"),
 	Lighting = game:GetService("Lighting"),
@@ -28,10 +27,8 @@ local OriginalSettings = {
 -- Group effects
 local Effects = {
 	colorCorrection = Services.Lighting:FindFirstChild("CustomColorCorrection") or Instance.new("ColorCorrectionEffect", Services.Lighting),
-	bloom = Services.Lighting:FindFirstChild("Bloom") or Instance.new("BloomEffect", Services.Lighting)
 }
 Effects.colorCorrection.Name = "CustomColorCorrection"
-Effects.bloom.Name = "Bloom"
 
 -- Store default animations for fallback
 local DefaultAnimations = {
@@ -61,12 +58,12 @@ local States = {
 	espNames = {},
 	keybinds = {
 		Menu = Enum.KeyCode.G,
-		Aimlock = Enum.KeyCode.Q,
-		ESP = Enum.KeyCode.J,
-		ClickTeleport = Enum.KeyCode.E,
+		Aimlock = nil,
+		ESP = nil,
+		ClickTeleport = nil,
 		Fly = nil,
-		FreeCam = Enum.KeyCode.P,
-		Speed = nil
+		FreeCam = nil,
+		Speed = nil,
 	},
 	aimlockFOV = 150,
 	showFOVCone = false,
@@ -105,7 +102,16 @@ local States = {
 	bodyVelocity = nil,
 	bodyGyro = nil,
 	randomTargetActive = false,
-	clickTeleportKeyHeld = false  -- Neu hinzugefügt für die Click-to-Teleport-Logik
+	clickTeleportKeyHeld = false,
+	animationSpeedMultiplier = 1.0,
+	walkAirActive = false,
+	infiniteJumpActive = false,
+	walkAirBodyPosition = nil,
+	walkAirPlatform = nil,
+	targetY = 0,
+	infiniteJumpConnection = nil,
+	animationSpeedConnection = nil,
+	menuVisible = true
 }
 
 -- Group colors
@@ -134,7 +140,6 @@ local UIStates = {
 local CachedData = {
 	cachedPlayers = Services.Players:GetPlayers(),
 	seenPlayers = {},
-	ScriptWhitelist = {},
 	httprequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 }
 
@@ -177,7 +182,7 @@ local function PlayAnim(id, time, speed)
 		local loadanim = hum:LoadAnimation(Anim)
 		loadanim:Play()
 		loadanim.TimePosition = time
-		loadanim:AdjustSpeed(speed)
+		loadanim:AdjustSpeed(speed * States.animationSpeedMultiplier)
 		loadanim.Stopped:Connect(function()
 			for _, track in pairs(hum:GetPlayingAnimationTracks()) do track:Stop() end
 		end)
@@ -192,9 +197,129 @@ local function StopAnim()
 	end)
 end
 
--- Initialize GUI
+-- Function to unload script - completely revised
+local function unloadScript()
+	-- Destroy GUI
+	if gui then gui:Destroy() end
+
+	-- Disconnect all connections
+	if States.infiniteJumpConnection then States.infiniteJumpConnection:Disconnect() end
+	if States.animationSpeedConnection then States.animationSpeedConnection:Disconnect() end
+
+	-- Remove effects
+	if Effects.colorCorrection then Effects.colorCorrection:Destroy() end
+
+	-- Restore camera settings
+	PlayerData.camera.FieldOfView = OriginalSettings.FOV
+	Services.Lighting.ClockTime = OriginalSettings.ClockTime
+	PlayerData.player.CameraMaxZoomDistance = OriginalSettings.MaxZoom
+
+	-- Clean up ESP
+	for p, h in pairs(States.espHighlights) do if h then h:Destroy() end end
+	for p, n in pairs(States.espNames) do if n then n:Destroy() end end
+
+	-- Restore materials and transparency
+	if States.wallhackActive then
+		for p, t in pairs(OriginalSettings.Transparency) do
+			if p.Parent then p.Transparency = t end
+		end
+	end
+	if States.lowTextureActive then
+		for p, m in pairs(OriginalSettings.Materials) do
+			if p.Parent then p.Material = m end
+		end
+	end
+
+	-- Stop animations
+	StopAnim()
+
+	-- Restore default animations
+	local Animate = PlayerData.character and PlayerData.character:FindFirstChild("Animate")
+	if Animate then
+		Animate.Disabled = true
+		local animation1 = Animate.idle:FindFirstChild("Animation1")
+		if animation1 then animation1.AnimationId = DefaultAnimations.idle1 end
+		local animation2 = Animate.idle:FindFirstChild("Animation2")
+		if animation2 then animation2.AnimationId = DefaultAnimations.idle2 end
+		local walkAnim = Animate.walk:FindFirstChild("WalkAnim")
+		if walkAnim then walkAnim.AnimationId = DefaultAnimations.walk end
+		local runAnim = Animate.run:FindFirstChild("RunAnim")
+		if runAnim then runAnim.AnimationId = DefaultAnimations.run end
+		local jumpAnim = Animate.jump:FindFirstChild("JumpAnim")
+		if jumpAnim then jumpAnim.AnimationId = DefaultAnimations.jump end
+		local climbAnim = Animate.climb:FindFirstChild("ClimbAnim")
+		if climbAnim then climbAnim.AnimationId = DefaultAnimations.climb end
+		local fallAnim = Animate.fall:FindFirstChild("FallAnim")
+		if fallAnim then fallAnim.AnimationId = DefaultAnimations.fall end
+		local swimAnim = Animate.swim:FindFirstChild("SwimAnim")
+		if swimAnim then swimAnim.AnimationId = DefaultAnimations.swimAnim end
+		local swimIdle = Animate.swim:FindFirstChild("SwimIdle")
+		if swimIdle then swimIdle.AnimationId = DefaultAnimations.swimIdle end
+		Animate.Disabled = false
+	end
+
+	-- Remove physics objects
+	if States.bodyVelocity then States.bodyVelocity:Destroy() States.bodyVelocity = nil end
+	if States.bodyGyro then States.bodyGyro:Destroy() States.bodyGyro = nil end
+	if States.walkAirBodyPosition then States.walkAirBodyPosition:Destroy() States.walkAirBodyPosition = nil end
+	if States.walkAirPlatform then States.walkAirPlatform:Destroy() States.walkAirPlatform = nil end
+
+	-- Reset camera
+	PlayerData.camera.CameraType = Enum.CameraType.Custom
+	if PlayerData.character then
+		PlayerData.camera.CameraSubject = PlayerData.character.Humanoid
+	end
+
+	-- Unbind all keybinds
+	for key, _ in pairs(States.keybinds) do
+		States.keybinds[key] = nil
+	end
+
+	-- Reset all toggle states
+	for key, _ in pairs(UIStates.toggleStates) do
+		UIStates.toggleStates[key] = false
+	end
+
+	-- Reset all active states
+	States.aimlockActive = false
+	States.espActive = false
+	States.wallhackActive = false
+	States.lowTextureActive = false
+	States.silentAimActive = false
+	States.predictionActive = false
+	States.cframeSpeedActive = false
+	States.flyActive = false
+	States.freeCamActive = false
+	States.noclipActive = false
+	States.clickTeleportActive = false
+	States.spinActive = false
+	States.walkAirActive = false
+	States.infiniteJumpActive = false
+
+	-- Restore humanoid properties if they exist
+	if PlayerData.humanoid then
+		PlayerData.humanoid.WalkSpeed = 16
+		PlayerData.humanoid.JumpPower = 50
+		PlayerData.humanoid.PlatformStand = false
+	end
+
+	-- Final cleanup
+	States = nil
+	Colors = nil
+	UIStates = nil
+	CachedData = nil
+	PlayerData = nil
+	OriginalSettings = nil
+	Effects = nil
+	DefaultAnimations = nil
+
+	-- Notify user
+	notify("Zangetsu", "Script completely unloaded", 3)
+end
+
+-- Initialize GUI with increased width
 local gui = create("ScreenGui", {Name = "Settings", ResetOnSpawn = false, IgnoreGuiInset = true, Parent = PlayerData.player:WaitForChild("PlayerGui")})
-local mainFrame = create("Frame", {Size = UDim2.new(0, 419, 0, 520), Position = UDim2.new(0.5, -210, 0.5, -260), BackgroundColor3 = Colors.Background, BackgroundTransparency = States.menuTransparency, Visible = false, Parent = gui})
+local mainFrame = create("Frame", {Size = UDim2.new(0, 500, 0, 520), Position = UDim2.new(0.5, -250, 0.5, -260), BackgroundColor3 = Colors.Background, BackgroundTransparency = States.menuTransparency, Visible = true, Parent = gui})
 create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = mainFrame})
 create("UIGradient", {Color = ColorSequence.new(Color3.fromRGB(20, 20, 40), Color3.fromRGB(50, 50, 80)), Rotation = 45, Parent = mainFrame})
 local header = create("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = Colors.Header, Parent = mainFrame})
@@ -206,11 +331,82 @@ local fpsLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position =
 local pingLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.55, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Ping: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
 local playersLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.7, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Players: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
 
+-- X-Button with confirmation dialog
+local closeBtn = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -25, 0, 5), BackgroundTransparency = 1, Text = "X", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = header})
+
+-- Confirmation dialog
+local confirmDialog = create("Frame", {
+	Size = UDim2.new(0, 200, 0, 100),
+	Position = UDim2.new(0.5, -100, 0.5, -50),
+	BackgroundColor3 = Colors.Background,
+	BackgroundTransparency = 0.2,
+	Visible = false,
+	Parent = gui
+})
+create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = confirmDialog})
+local confirmText = create("TextLabel", {
+	Size = UDim2.new(1, 0, 0.5, 0),
+	BackgroundTransparency = 1,
+	Text = "Are you sure to unload?",
+	TextColor3 = Colors.Text,
+	TextSize = 16,
+	Font = Enum.Font.FredokaOne,
+	TextXAlignment = Enum.TextXAlignment.Center,
+	Parent = confirmDialog
+})
+local yesBtn = create("TextButton", {
+	Size = UDim2.new(0.4, 0, 0.3, 0),
+	Position = UDim2.new(0.1, 0, 0.6, 0),
+	BackgroundColor3 = Colors.Interface,
+	Text = "Yes",
+	TextColor3 = Colors.Text,
+	TextSize = 14,
+	Font = Enum.Font.FredokaOne,
+	Parent = confirmDialog
+})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = yesBtn})
+local noBtn = create("TextButton", {
+	Size = UDim2.new(0.4, 0, 0.3, 0),
+	Position = UDim2.new(0.5, 0, 0.6, 0),
+	BackgroundColor3 = Colors.Button,
+	Text = "No",
+	TextColor3 = Colors.Text,
+	TextSize = 14,
+	Font = Enum.Font.FredokaOne,
+	Parent = confirmDialog
+})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = noBtn})
+
+yesBtn.MouseButton1Click:Connect(function()
+	States.menuVisible = false
+	mainFrame.Visible = false
+	unloadScript()
+end)
+
+noBtn.MouseButton1Click:Connect(function()
+	confirmDialog.Visible = false
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	confirmDialog.Visible = true
+end)
+
+-- Minimize button
+local minimizeBtn = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -85, 0, 3), BackgroundTransparency = 1, Text = "-", TextColor3 = Colors.Text, TextSize = 20, Font = Enum.Font.FredokaOne, Parent = header})
+minimizeBtn.MouseButton1Click:Connect(function()
+	States.menuVisible = not States.menuVisible
+	mainFrame.Visible = States.menuVisible
+end)
+
+-- Keybind Image-Button 
+local keybindBtn = create("ImageButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -55, 0, 5), BackgroundTransparency = 1, Image = "rbxassetid://6023565895", ImageColor3 = Colors.Text, Parent = header})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = keybindBtn})
+
 local tabFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = mainFrame})
 create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 5), Parent = tabFrame})
 local tabs, tabContents = {}, {}
 local function addTab(name, w)
-	local btn = create("TextButton", {Size = UDim2.new(0, w or 80, 0, 25), BackgroundColor3 = Colors.TabUnselected, Text = name, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = tabFrame})
+	local btn = create("TextButton", {Size = UDim2.new(0, w or 75, 0, 25), BackgroundColor3 = Colors.TabUnselected, Text = name, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = tabFrame})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
 	local cont = create("ScrollingFrame", {Size = UDim2.new(1, -18, 1, -70), Position = UDim2.new(0, 9, 0, 70), BackgroundTransparency = 1, ScrollBarThickness = 0, CanvasSize = UDim2.new(0, 0, 0, 0), Visible = false, Parent = mainFrame})
 	tabs[name] = btn
@@ -227,12 +423,13 @@ local playerTab = addTab("Player")
 local combatTab = addTab("Combat")
 local targetTab = addTab("Target")
 local animationsTab = addTab("Animations")
+local settingsTab = addTab("Settings")
 local keybindsFrame = create("Frame", {Size = UDim2.new(0, 200, 0, 520), Position = UDim2.new(1, 0, 0, 0), BackgroundColor3 = Colors.KeybindsBG, BackgroundTransparency = States.menuTransparency, Visible = false, Parent = mainFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = keybindsFrame})
 create("UIGradient", {Color = ColorSequence.new(Colors.KeybindsBG, Colors.Header), Rotation = 45, Parent = keybindsFrame})
 local keybindsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -10, 1, -10), Position = UDim2.new(0, 5, 0, 5), BackgroundTransparency = 1, ScrollBarThickness = 0, CanvasSize = UDim2.new(0, 0, 0, 400), Parent = keybindsFrame})
 local function toggleKeybindsFrame() keybindsFrame.Visible = not keybindsFrame.Visible end
-create("ImageButton", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -34, 0, 8), BackgroundTransparency = 1, Image = "rbxassetid://6023565895", ImageColor3 = Colors.Text, Parent = header}).MouseButton1Click:Connect(toggleKeybindsFrame)
+keybindBtn.MouseButton1Click:Connect(toggleKeybindsFrame)
 
 local toggleCallbacks = {}
 local function addToggle(name, def, y, cb, parent)
@@ -257,7 +454,7 @@ local function addSlider(name, min, max, def, y, cb, parent, nl, nd)
 	UIStates.sliderValues[name] = def
 	local f = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, y), BackgroundTransparency = 1, Parent = parent})
 	local l = nl and nil or create("TextLabel", {Size = UDim2.new(0, 180, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundTransparency = 1, Text = nd and string.format("%s: %d", name, def) or string.format("%s: %.1f", name, def), TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = f})
-	local sf = create("Frame", {Size = nl and UDim2.new(0.95, 0, 0, 12) or UDim2.new(0, 200, 0, 12), Position = nl and UDim2.new(0.025, 0, 0.5, -6) or UDim2.new(0, 170, 0.5, -6), BackgroundColor3 = Colors.Button, Parent = f})
+	local sf = create("Frame", {Size = nl and UDim2.new(0.95, 0, 0, 12) or UDim2.new(0, 280, 0, 12), Position = nl and UDim2.new(0.025, 0, 0.5, -6) or UDim2.new(0, 170, 0.5, -6), BackgroundColor3 = Colors.Button, Parent = f})
 	create("UICorner", {CornerRadius = UDim.new(0, 6), Parent = sf})
 	local fill = create("Frame", {Size = UDim2.new((def - min) / (max - min), 0, 1, 0), BackgroundColor3 = Colors.Interface, Parent = sf})
 	create("UICorner", {CornerRadius = UDim.new(0, 6), Parent = fill})
@@ -342,7 +539,7 @@ end
 local function addVoiceChatUnban(y, p)
 	local f = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, y), BackgroundTransparency = 1, Parent = p})
 	create("TextLabel", {Size = UDim2.new(0.7, 0, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundTransparency = 1, Text = "VC Unban", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = f})
-	local b = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(0.85, -16, 0.5, -10), BackgroundColor3 = Colors.Interface, Text = "Start", TextColor3 = Colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = f})
+	local b = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(0.85, 0, 0.5, -10), BackgroundColor3 = Colors.Interface, Text = "Start", TextColor3 = Colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = f})
 	create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = b})
 	b.MouseButton1Click:Connect(function()
 		pcall(function() game:GetService("VoiceChatService"):joinVoice() end)
@@ -456,10 +653,10 @@ task.spawn(function()
 	end
 end)
 
+-- Visuals Tab
 addSlider("Saturation", -1, 2, 0, 0, function(v) if v ~= Effects.colorCorrection.Saturation then Effects.colorCorrection.Saturation = v end end, visualsTab, false, false)
 addSlider("FOV", 30, 120, 70, 40, function(v) if v ~= PlayerData.camera.FieldOfView then PlayerData.camera.FieldOfView = v end end, visualsTab, false, true)
 addSlider("Time", 0, 24, OriginalSettings.ClockTime, 80, function(v) Services.Lighting.ClockTime = v end, visualsTab, false, false)
-addSlider("Bloom Intensity", 0, 10, Effects.bloom.Intensity, 280, function(v) Effects.bloom.Intensity = v end, visualsTab, false, false)
 local ef, et = addToggle("ESP", false, 120, function(on) States.espActive = on updateESP() end, visualsTab)
 local cb = create("TextButton", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0.55, 0, 0, 10), BackgroundColor3 = Colors.ESP, Text = "Color", TextColor3 = Colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = ef})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = cb})
@@ -494,7 +691,7 @@ addToggle("Low Texture", false, 240, function(on)
 		end
 	end
 end, visualsTab)
-visualsTab.CanvasSize = UDim2.new(0, 0, 0, 330)
+visualsTab.CanvasSize = UDim2.new(0, 0, 0, 280)
 
 local csf, cst
 local ff, flyToggle
@@ -543,6 +740,10 @@ local fcf, fct = addToggle("Free Cam", false, 80, function(on)
 	if not PlayerData.character or not PlayerData.rootPart then return end
 	States.freeCamActive = on
 	if on then
+		-- Disable fly and speed when free cam is active
+		if States.flyActive then flyToggle(false) end
+		if States.cframeSpeedActive then cst(false) end
+
 		PlayerData.rootPart.Anchored = true
 		if PlayerData.humanoid then PlayerData.humanoid.WalkSpeed = 0 end
 		PlayerData.camera.CameraType = Enum.CameraType.Scriptable
@@ -567,16 +768,56 @@ fcsi.FocusLost:Connect(function(e)
 end)
 addToggle("Noclip", false, 120, function(on) States.noclipActive = on end, playerTab)
 addToggle("Click to Teleport", false, 160, function(on) States.clickTeleportActive = on end, playerTab)
-addToggle("Spin", false, 200, function(on) States.spinActive = on end, playerTab)
-addSlider("Spin Speed", 0, 100, 5, 240, function(v) States.spinSpeedValue = v end, playerTab, false, false)
-addVoiceChatUnban(280, playerTab)
+addToggle("Walk Air", false, 200, function(on)
+	States.walkAirActive = on
+	if on then
+		if not PlayerData.rootPart then return end
+		States.targetY = PlayerData.rootPart.Position.Y
+		States.walkAirBodyPosition = Instance.new("BodyPosition")
+		States.walkAirBodyPosition.MaxForce = Vector3.new(0, 100000, 0)
+		States.walkAirBodyPosition.Position = Vector3.new(PlayerData.rootPart.Position.X, States.targetY, PlayerData.rootPart.Position.Z)
+		States.walkAirBodyPosition.Parent = PlayerData.rootPart
+		States.walkAirPlatform = Instance.new("Part")
+		States.walkAirPlatform.Size = Vector3.new(10, 1, 10)
+		States.walkAirPlatform.Transparency = 1
+		States.walkAirPlatform.CanCollide = true
+		States.walkAirPlatform.Anchored = true
+		States.walkAirPlatform.Position = Vector3.new(PlayerData.rootPart.Position.X, States.targetY - 3, PlayerData.rootPart.Position.Z)
+		States.walkAirPlatform.Parent = workspace
+	else
+		if States.walkAirBodyPosition then
+			States.walkAirBodyPosition:Destroy()
+			States.walkAirBodyPosition = nil
+		end
+		if States.walkAirPlatform then
+			States.walkAirPlatform:Destroy()
+			States.walkAirPlatform = nil
+		end
+	end
+end, playerTab)
+local ijf, ijt = addToggle("Infinite Jump", false, 240, function(on)
+	States.infiniteJumpActive = on
+	if on then
+		States.infiniteJumpConnection = Services.UserInputService.JumpRequest:Connect(function()
+			if PlayerData.humanoid then
+				PlayerData.humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end)
+	else
+		if States.infiniteJumpConnection then
+			States.infiniteJumpConnection:Disconnect()
+			States.infiniteJumpConnection = nil
+		end
+	end
+end, playerTab)
+addToggle("Spin", false, 280, function(on) States.spinActive = on end, playerTab)
+addSlider("Spin Speed", 0, 100, 5, 320, function(v) States.spinSpeedValue = v end, playerTab, false, false)
+addVoiceChatUnban(360, playerTab)
 
--- Entfernte "Save Position" und "Select Position" Buttons und Funktionen
-
-local rejoinBtn = addActionButton("Rejoin", 10, 320, function()
+local rejoinBtn = addActionButton("Rejoin", 10, 400, function()
 	game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, PlayerData.player)
 end, playerTab, 120)
-local serverHopBtn = addActionButton("Server Hop", 140, 320, function()
+local serverHopBtn = addActionButton("Server Hop", 140, 400, function()
 	if CachedData.httprequest then
 		local servers = {}
 		local req = CachedData.httprequest({ Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId) })
@@ -593,7 +834,7 @@ local serverHopBtn = addActionButton("Server Hop", 140, 320, function()
 		end
 	end
 end, playerTab, 120)
-local jerkBtn = addActionButton("Jerk", 270, 320, function()
+local jerkBtn = addActionButton("Jerk", 270, 400, function()
 	if not PlayerData.character then return end
 	local isR6 = PlayerData.character:FindFirstChild("Torso") ~= nil
 	local scriptUrl = isR6 and "https://pastefy.app/wa3v2Vgm/raw" or "https://pastefy.app/YZoglOyJ/raw"
@@ -606,69 +847,7 @@ local jerkBtn = addActionButton("Jerk", 270, 320, function()
 		notify("Error", "Failed to load jerk script.", 5)
 	end
 end, playerTab, 120)
-
--- Add Join Friend and Join functionality to playerTab
-local joinFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 100), Position = UDim2.new(0, 0, 0, 360), BackgroundTransparency = 1, Parent = playerTab})
-create("TextLabel", {Size = UDim2.new(0, 100, 0, 20), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Join Player:", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
-local joinInput = create("TextBox", {Size = UDim2.new(0, 150, 0, 20), Position = UDim2.new(0, 120, 0, 0), BackgroundColor3 = Colors.Button, Text = "", PlaceholderText = "Username or UserID", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
-create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinInput})
-local joinBtn = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(0, 280, 0, 0), BackgroundColor3 = Colors.Interface, Text = "Join", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
-create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinBtn})
-local joinFriendBtn = create("TextButton", {Size = UDim2.new(0, 100, 0, 20), Position = UDim2.new(0, 10, 0, 30), BackgroundColor3 = Colors.Button, Text = "Join Friend", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = joinFrame})
-create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = joinFriendBtn})
-local friendListFrame = create("ScrollingFrame", {Size = UDim2.new(0, 200, 0, 100), Position = UDim2.new(0, 120, 0, 30), BackgroundColor3 = Colors.Background, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new(0, 0, 0, 0), Visible = false, Parent = joinFrame})
-create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = friendListFrame})
-
-local function populateFriendList()
-	friendListFrame:ClearAllChildren()
-	local friendsOnline = PlayerData.player:GetFriendsOnline()
-	local yOffset = 0
-	for _, friend in pairs(friendsOnline) do
-		if friend.IsOnline and friend.PlaceId and friend.GameId then
-			local friendBtn = create("TextButton", {Size = UDim2.new(1, -10, 0, 20), Position = UDim2.new(0, 5, 0, yOffset), BackgroundColor3 = Colors.Button, Text = friend.UserName, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = friendListFrame})
-			create("UICorner", {CornerRadius = UDim.new(0, 5), Parent = friendBtn})
-			friendBtn.MouseButton1Click:Connect(function()
-				joinInput.Text = friend.UserName
-				friendListFrame.Visible = false
-			end)
-			yOffset = yOffset + 25
-		end
-	end
-	friendListFrame.CanvasSize = UDim2.new(0, 0, 0, yOffset)
-end
-
-joinFriendBtn.MouseButton1Click:Connect(function()
-	friendListFrame.Visible = not friendListFrame.Visible
-	if friendListFrame.Visible then
-		populateFriendList()
-	end
-end)
-
-joinBtn.MouseButton1Click:Connect(function()
-	local input = joinInput.Text
-	if input == "" then return end
-	local userId
-	if tonumber(input) then
-		userId = tonumber(input)
-	else
-		pcall(function()
-			userId = Services.Players:GetUserIdFromNameAsync(input)
-		end)
-	end
-	if not userId then
-		notify("Error", "Invalid username or userId.", 5)
-		return
-	end
-	local friendsOnline = PlayerData.player:GetFriendsOnline()
-	for _, friend in pairs(friendsOnline) do
-		if friend.VisitorId == userId and friend.PlaceId and friend.GameId then
-			game:GetService("TeleportService"):TeleportToPlaceInstance(friend.PlaceId, friend.GameId, PlayerData.player)
-			return
-		end
-	end
-	notify("Error", "Player not found or not in a game.", 5)
-end)
-playerTab.CanvasSize = UDim2.new(0, 0, 0, 470)
+playerTab.CanvasSize = UDim2.new(0, 0, 0, 450)
 
 local af, at = addToggle("Aimlock", false, 0, function(on) States.aimlockActive = on if not on then States.lockedTarget = nil States.aimlockLocked = false end end, combatTab)
 local asf = create("Frame", {Size = UDim2.new(1, 0, 0, 200), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = combatTab})
@@ -706,6 +885,12 @@ fovLockBtn.MouseButton1Click:Connect(function()
 	end
 	if States.fovCone then States.fovCone.Visible = States.showFOVCone end
 end)
+-- Dahood button below Aimlock slider
+local dahoodBtn = create("TextButton", {Size = UDim2.new(0, 80, 0, 25), Position = UDim2.new(0, 10, 0, 80), BackgroundColor3 = Colors.Button, Text = "Dahood", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = asf})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = dahoodBtn})
+dahoodBtn.MouseButton1Click:Connect(function()
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/Actyrn/Scripts/main/AzureModded"))()
+end)
 combatTab.CanvasSize = UDim2.new(0, 0, 0, 240)
 
 local targetInputFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1, Parent = targetTab})
@@ -720,12 +905,12 @@ local viewActive = false
 local viewBtn, viewToggle = addButton("View", 10, 160, function(s)
 	viewActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			if States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("Humanoid") then
 				PlayerData.camera.CameraSubject = States.targetedPlayer.Character.Humanoid
 			end
 		else
-			notify("Skye", "Cannot view whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			viewToggle(false)
 		end
 	else
@@ -734,12 +919,12 @@ local viewBtn, viewToggle = addButton("View", 10, 160, function(s)
 end, targetTab, false, 120)
 
 local teleportBtn = addActionButton("Teleport", 140, 160, function()
-	if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+	if States.targetedPlayer then
 		if States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
 			PlayerData.rootPart.CFrame = States.targetedPlayer.Character.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
 		end
 	else
-		notify("Skye", "Cannot teleport to whitelisted player.", 5)
+		notify("Zangetsu", "No target selected.", 5)
 	end
 end, targetTab, 120)
 
@@ -747,7 +932,7 @@ local headsitActive = false
 local headsitBtn, headsitToggle = addButton("Headsit", 10, 200, function(s)
 	headsitActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			task.spawn(function()
 				while headsitActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("Head") then
@@ -766,7 +951,7 @@ local headsitBtn, headsitToggle = addButton("Headsit", 10, 200, function(s)
 				end
 			end)
 		else
-			notify("Skye", "Cannot headsit whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			headsitToggle(false)
 		end
 	end
@@ -776,7 +961,7 @@ local standActive = false
 local standBtn, standToggle = addButton("Stand", 140, 200, function(s)
 	standActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			PlayAnim(13823324057, 4, 0)
 			task.spawn(function()
 				while standActive do
@@ -796,7 +981,7 @@ local standBtn, standToggle = addButton("Stand", 140, 200, function(s)
 				StopAnim()
 			end)
 		else
-			notify("Skye", "Cannot stand on whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			standToggle(false)
 		end
 	end
@@ -806,7 +991,7 @@ local bangActive = false
 local bangBtn, bangToggle = addButton("Bang", 10, 240, function(s)
 	bangActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			PlayAnim(5918726674, 0, 1)
 			task.spawn(function()
 				while bangActive do
@@ -826,7 +1011,7 @@ local bangBtn, bangToggle = addButton("Bang", 10, 240, function(s)
 				StopAnim()
 			end)
 		else
-			notify("Skye", "Cannot bang whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			bangToggle(false)
 		end
 	end
@@ -837,7 +1022,7 @@ local flingVelocityTask
 local flingOldPos
 local flingBtn, flingToggle = addButton("Fling", 140, 240, function(s)
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			flingOldPos = PlayerData.rootPart.Position
 			flingActive = true
 			flingVelocityTask = task.spawn(function()
@@ -865,7 +1050,7 @@ local flingBtn, flingToggle = addButton("Fling", 140, 240, function(s)
 				end
 			end)
 		else
-			notify("Skye", "Cannot fling whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 		end
 	else
 		flingActive = false
@@ -888,7 +1073,7 @@ local backpackActive = false
 local backpackBtn, backpackToggle = addButton("Backpack", 10, 280, function(s)
 	backpackActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			task.spawn(function()
 				while backpackActive do
 					if States.targetedPlayer and States.targetedPlayer.Character and States.targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
@@ -907,7 +1092,7 @@ local backpackBtn, backpackToggle = addButton("Backpack", 10, 280, function(s)
 				end
 			end)
 		else
-			notify("Skye", "Cannot backpack whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			backpackToggle(false)
 		end
 	end
@@ -917,7 +1102,7 @@ local doggyActive = false
 local doggyBtn, doggyToggle = addButton("Doggy", 140, 280, function(s)
 	doggyActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			PlayAnim(13694096724, 3.4, 0)
 			task.spawn(function()
 				while doggyActive do
@@ -937,7 +1122,7 @@ local doggyBtn, doggyToggle = addButton("Doggy", 140, 280, function(s)
 				StopAnim()
 			end)
 		else
-			notify("Skye", "Cannot doggy whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			doggyToggle(false)
 		end
 	end
@@ -947,7 +1132,7 @@ local dragActive = false
 local dragBtn, dragToggle = addButton("Drag", 10, 320, function(s)
 	dragActive = s
 	if s then
-		if States.targetedPlayer and not table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
+		if States.targetedPlayer then
 			PlayAnim(10714360343, 0.5, 0)
 			task.spawn(function()
 				while dragActive do
@@ -967,23 +1152,31 @@ local dragBtn, dragToggle = addButton("Drag", 10, 320, function(s)
 				StopAnim()
 			end)
 		else
-			notify("Skye", "Cannot drag whitelisted player.", 5)
+			notify("Zangetsu", "No target selected.", 5)
 			dragToggle(false)
 		end
 	end
 end, targetTab, false, 120)
 
-local whitelistBtn = addActionButton("Whitelist", 140, 320, function()
-	if States.targetedPlayer then
-		if table.find(CachedData.ScriptWhitelist, States.targetedPlayer.UserId) then
-			for i, v in pairs(CachedData.ScriptWhitelist) do
-				if v == States.targetedPlayer.UserId then table.remove(CachedData.ScriptWhitelist, i) end
+local findNearestBtn = addActionButton("Find Nearest", 140, 320, function()
+	local nearestPlayer = nil
+	local minDistance = math.huge
+	local myPos = PlayerData.rootPart and PlayerData.rootPart.Position
+	if not myPos then return end
+	for _, p in pairs(Services.Players:GetPlayers()) do
+		if p ~= PlayerData.player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local distance = (p.Character.HumanoidRootPart.Position - myPos).Magnitude
+			if distance < minDistance then
+				minDistance = distance
+				nearestPlayer = p
 			end
-			notify("Skye", States.targetedPlayer.Name .. " removed from whitelist.", 5)
-		else
-			table.insert(CachedData.ScriptWhitelist, States.targetedPlayer.UserId)
-			notify("Skye", States.targetedPlayer.Name .. " added to whitelist.", 5)
 		end
+	end
+	if nearestPlayer then
+		States.targetedPlayer = nearestPlayer
+		targetInput.Text = nearestPlayer.Name
+		targetImage.Image = Services.Players:GetUserThumbnailAsync(nearestPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+		userInfoLabel.Text = ("UserID: %d\nDisplay: %s\nJoined: %s"):format(nearestPlayer.UserId, nearestPlayer.DisplayName, os.date("%d-%m-%Y", os.time() - nearestPlayer.AccountAge * 24 * 3600))
 	end
 end, targetTab, 120)
 
@@ -1154,13 +1347,14 @@ local function applyCustomAnimations()
 end
 
 local animButtonsFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 400), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1, Parent = animationsTab})
-local animGrid = create("UIGridLayout", {CellSize = UDim2.new(0, 90, 0, 25), CellPadding = UDim2.new(0, 10, 0, 10), Parent = animButtonsFrame})
-local animStagesFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 280), Position = UDim2.new(0, 0, 0, 410), BackgroundTransparency = 1, Parent = animationsTab})
-local divider = create("Frame", {Size = UDim2.new(0.9, 0, 0, 2), Position = UDim2.new(0.05, 0, 0, 395), BackgroundColor3 = Colors.Outline, BackgroundTransparency = 0.5, Parent = animationsTab})
+-- Adjusted for 5 buttons per row
+local animGrid = create("UIGridLayout", {CellSize = UDim2.new(0, 85, 0, 25), CellPadding = UDim2.new(0, 10, 0, 10), Parent = animButtonsFrame})
+local animStagesFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 280), Position = UDim2.new(0, 0, 0, 460), BackgroundTransparency = 1, Parent = animationsTab})
+local divider = create("Frame", {Size = UDim2.new(0.9, 0, 0, 2), Position = UDim2.new(0.05, 0, 0, 445), BackgroundColor3 = Colors.Outline, BackgroundTransparency = 0.5, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 1), Parent = divider})
-create("TextLabel", {Size = UDim2.new(1, 0, 0, 25), Position = UDim2.new(0, 0, 0, 380), BackgroundTransparency = 1, Text = "Custom Animation Controls", TextColor3 = Colors.Text, TextSize = 16, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = animationsTab})
+create("TextLabel", {Size = UDim2.new(1, 0, 0, 25), Position = UDim2.new(0, 0, 0, 430), BackgroundTransparency = 1, Text = "Custom Animation Controls", TextColor3 = Colors.Text, TextSize = 16, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = animationsTab})
 
-local loadPresetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0.5, -60, 0, 330), BackgroundColor3 = Colors.Button, Text = "Load to Custom", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+local loadPresetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0.5, -60, 0, 392), BackgroundColor3 = Colors.Button, Text = "Load to Custom", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = loadPresetBtn})
 loadPresetBtn.MouseButton1Click:Connect(function()
 	if States.lastSelectedPreset then
@@ -1270,14 +1464,37 @@ resetBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
+addSlider("Animation Speed", 0, 25, 1.0, 750, function(v)
+	States.animationSpeedMultiplier = v
+	if PlayerData.humanoid then
+		for _, track in pairs(PlayerData.humanoid:GetPlayingAnimationTracks()) do
+			track:AdjustSpeed(v)
+		end
+	end
+end, animationsTab, false, false)
+-- Emotes button below Animation Speed Slider
+local emotesBtn = create("TextButton", {Size = UDim2.new(0, 80, 0, 25), Position = UDim2.new(0, 10, 0, 800), BackgroundColor3 = Colors.Button, Text = "Emotes", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = emotesBtn})
+emotesBtn.MouseButton1Click:Connect(function()
+	loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Gi7331/scripts/main/Emote.lua"))()
+	notify("Emotes", "Open with ,", 5)
+end)
+animationsTab.CanvasSize = UDim2.new(0, 0, 0, 830)
+
+-- Settings Tab: Menu Transparency Slider
+addSlider("Menu Transparency", 0, 1, States.menuTransparency, 0, function(v)
+	States.menuTransparency = v
+	mainFrame.BackgroundTransparency = v
+	keybindsFrame.BackgroundTransparency = v
+end, settingsTab, false, false)
+
 local animButtons = {
 	{"Vampire", "1083445855", "1083450166", "1083473930", "1083462077", "1083455352", "1083439238", "1083443587"},
 	{"Hero", "616111295", "616113536", "616122287", "616117076", "616115533", "616104706", "616108001"},
 	{"Zombie Classic", "616158929", "616160636", "616168032", "616163682", "616161997", "616156119", "616157476"},
 	{"Mage", "707742142", "707855907", "707897309", "707861613", "707853694", "707826056", "707829716"},
-	{"Ghost", "616006778", "616008087", "616010382", "616013216", "616008936", "616003713", "616005863"},
+	{"Ghost", "616006778", "616008087", "616013216", "616010382", "616008936", "616003713", "616005863"},
 	{"Elder", "845397899", "845400520", "845403856", "845386501", "845398858", "845392038", "845396048"},
-	{"Levitation", "616006778", "616008087", "616013216", "616010382", "616008936", "616003713", "616005863"},
 	{"Astronaut", "891621366", "891633237", "891667138", "891636393", "891627522", "891609353", "891617961"},
 	{"Ninja", "656117400", "656118341", "656121766", "656118852", "656117878", "656114359", "656115606"},
 	{"Werewolf", "1083195517", "1083214717", "1083178339", "1083216690", "1083218792", "1083182000", "1083189019"},
@@ -1293,23 +1510,29 @@ local animButtons = {
 	{"Patrol", "1149612882", "1150842221", "1151231493", "1150967949", "1150944216", "1148811837", "1148863382"},
 	{"FE Zombie", "3489171152", "3489171152", "3489174223", "3489173414", "616161997", "616156119", "616157476"},
 	{"Stylized Female", "4708192150", "4708191566", "4708193840", "4708192705", "4708188025", "4708184253", "4708186162"},
-	{"Oldschool", "10921230744", "10921232093", "10921244891", "10921240218", "10921242013", "10921229866", "10921241244"},
-	{"Rthro", "10921259953", "10921258489", "10921269718", "10921261968", "10921263860", "10921257536", "10921262864"},
+	{"Oldschool", "5319828216", "5319831086", "5319847204", "5319844329", "5319841935", "5319816685", "5319839762"},
+	{"Rthro", "2510196951", "2510197257", "2510202577", "2510198475", "2510197830", "2510192778", "2510195892"},
 	{"Wicked", "118832222982049", "76049494037641", "92072849924640", "72301599441680", "104325245285198", "131326830509784", "121152442762481"},
-	{"Stylish", "10921272275", "10921273958", "10921283326", "10921276116", "10921279832", "10921271391", "10921278648"},
+	{"Stylish", "616136790", "616138447", "616146177", "616140816", "616139451", "616133594", "616134815"},
 	{"adidas", "18537376492", "18537371272", "18537392113", "18537384940", "18537380791", "18537363391", "18537367238"},
-	{"Robot", "10921248039", "10921248831", "10921255446", "10921250460", "10921252123", "10921247141", "10921251156"},
+	{"Robot", "616088211", "616089559", "616095330", "616091570", "616090535", "616086039", "616087089"},
 	{"Bold", "16738333868", "16738334710", "16738340646", "16738337225", "16738336650", "16738332169", "16738333171"},
 	{"Catwalk", "133806214992291", "94970088341563", "109168724482748", "81024476153754", "116936326516985", "119377220967554", "92294537340807"},
-	{"Bubbly", "10921054344", "10921055107", "10980888364", "10921057244", "10921062673", "10921053544", "10921061530"},
+	{"Bubbly", "910004836", "910009958", "910034870", "910025107", "910016857", "909997997", "910001910"},
 	{"No Boundaries", "18747067405", "18747063918", "18747074203", "18747070484", "18747069148", "18747060903", "18747062535"},
-	{"Superhero", "10921288909", "10921290167", "10921298616", "10921291831", "10921294559", "10921286911", "10921293373"},
-	{"NFL", "92080889861410", "74451233229259", "110358958299415", "117333533048078", "119846112151352", "134630013742019", "129773241321032"}
+	{"NFL", "92080889861410", "74451233229259", "110358958299415", "117333533048078", "119846112151352", "134630013742019", "129773241321032"},
+	{"R15", "4211217646", "4211218409", "4211223236", "4211220381", "4211219390", "4211214992", "4211216152"},
+	{"Ghost 2", "1151221899", "1151221899", "1151221899", "1151221899", "1151221899", "0", "1151221899"},
+	{"Udzal", "3303162274", "3303162549", "3303162967", "3236836670", "2510197830", "2510192778", "2510195892"},
+	{"Oinan Thickhoof", "657595757", "657568135", "2510202577", "3236836670", "2510197830", "2510192778", "2510195892"},
+	{"Borock", "3293641938", "3293642554", "2510202577", "3236836670", "2510197830", "2510192778", "2510195892"},
+	{"Blocky Mech", "4417977954", "4417978624", "2510202577", "4417979645", "2510197830", "2510192778", "2510195892"},
+	{"Goofy", "18537387180", "18537387180", "18537367238", "18537367238", "18537367238", "18537367238", "18537367238"}
 }
 
 for _, anim in pairs(animButtons) do
 	local name, idle1, idle2, walk, run, jump, climb, fall = unpack(anim)
-	local b = create("TextButton", {Size = UDim2.new(0, 90, 0, 25), BackgroundColor3 = Colors.Button, Text = name, TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animButtonsFrame})
+	local b = create("TextButton", {Size = UDim2.new(0, 85, 0, 25), BackgroundColor3 = Colors.Button, Text = name, TextColor3 = Colors.Text, TextSize = 12.5 , Font = Enum.Font.FredokaOne, Parent = animButtonsFrame})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = b})
 	b.MouseButton1Click:Connect(function()
 		States.lastSelectedPreset = anim
@@ -1342,8 +1565,6 @@ for _, anim in pairs(animButtons) do
 	end)
 end
 
-animationsTab.CanvasSize = UDim2.new(0, 0, 0, stageOffset + 460)
-
 addKeybind("Menu", States.keybinds.Menu, 0)
 addKeybind("Aimlock", States.keybinds.Aimlock, 30)
 addKeybind("ESP", States.keybinds.ESP, 60)
@@ -1351,11 +1572,6 @@ addKeybind("Click to Teleport", States.keybinds.ClickTeleport, 90)
 addKeybind("Fly", States.keybinds.Fly, 120)
 addKeybind("FreeCam", States.keybinds.FreeCam, 150)
 addKeybind("Speed", States.keybinds.Speed, 180)
-addSlider("", 0, 1, States.menuTransparency, 240, function(v)
-	States.menuTransparency = v
-	mainFrame.BackgroundTransparency = v
-	keybindsFrame.BackgroundTransparency = v
-end, keybindsScroll, true, false).BackgroundTransparency = 1
 
 local cpf = create("Frame", {Size = UDim2.new(0, 200, 0, 150), Position = UDim2.new(0.5, -100, 0.5, -75), BackgroundColor3 = Colors.Background, Visible = false, Parent = gui})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = cpf})
@@ -1439,7 +1655,6 @@ local function isBindPressed(bind, input)
 end
 
 local frameCount = 0
-local lastTime = tick()
 Services.RunService.RenderStepped:Connect(function(dt)
 	frameCount = frameCount + 1
 	if not PlayerData.character or not PlayerData.rootPart then return end
@@ -1497,12 +1712,28 @@ Services.RunService.RenderStepped:Connect(function(dt)
 		local newRotation = CFrame.fromEulerAnglesYXZ(pitch, yaw, roll)
 		PlayerData.rootPart.CFrame = CFrame.new(position) * newRotation
 	end
+	if States.walkAirActive and States.walkAirBodyPosition and States.walkAirPlatform then
+		local dy = 0
+		if Services.UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+			dy = 50 * dt
+		elseif Services.UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+			dy = -50 * dt
+		end
+		if dy ~= 0 then
+			States.targetY = States.targetY + dy
+		end
+		States.walkAirBodyPosition.Position = Vector3.new(PlayerData.rootPart.Position.X, States.targetY, PlayerData.rootPart.Position.Z)
+		States.walkAirPlatform.Position = Vector3.new(PlayerData.rootPart.Position.X, States.targetY - 3, PlayerData.rootPart.Position.Z)
+	end
 end)
 
-task.spawn(function()
-	local lastUpdate = tick()
-	while true do
-		wait(0.5)
+-- Ping and FPS update with Heartbeat every 0.2 seconds
+local lastUpdate = tick()
+local updateInterval = 0.2
+local accumulatedTime = 0
+Services.RunService.Heartbeat:Connect(function(dt)
+	accumulatedTime = accumulatedTime + dt
+	if accumulatedTime >= updateInterval then
 		local currentTime = tick()
 		local elapsed = currentTime - lastUpdate
 		local fps = math.floor(frameCount / elapsed)
@@ -1513,6 +1744,7 @@ task.spawn(function()
 		pingLabel.Text = "Ping: " .. math.floor(ping)
 		local playerCount = #Services.Players:GetPlayers()
 		playersLabel.Text = "Players: " .. playerCount
+		accumulatedTime = 0
 	end
 end)
 
@@ -1539,6 +1771,11 @@ local function updateCharacter(c)
 	if not PlayerData.rootPart then warn("No HumanoidRootPart!") return end
 	task.wait(0.5)
 	storeDefaultAnimations()
+	applyCustomAnimations()
+	if States.animationSpeedConnection then States.animationSpeedConnection:Disconnect() end
+	States.animationSpeedConnection = PlayerData.humanoid.AnimationPlayed:Connect(function(track)
+		track:AdjustSpeed(States.animationSpeedMultiplier)
+	end)
 	if States.flyActive then
 		PlayerData.humanoid.PlatformStand = true
 		States.bodyVelocity = States.bodyVelocity or Instance.new("BodyVelocity")
@@ -1562,8 +1799,8 @@ Services.UserInputService.InputEnded:Connect(function(i) if i.UserInputType == E
 
 local r = false
 local function toggleMenu()
-	mainFrame.Visible = not mainFrame.Visible
-	mainFrame.Position = mainFrame.Visible and UDim2.new(0.5, -210, 0.5, -260) or UDim2.new(-0.5, -210, 0.5, -260)
+	States.menuVisible = not States.menuVisible
+	mainFrame.Visible = States.menuVisible
 end
 Services.UserInputService.InputBegan:Connect(function(i, gp)
 	if gp then return end
@@ -1612,62 +1849,7 @@ end)
 
 -- Cleanup on script end
 game:BindToClose(function()
-	if States.bodyVelocity then States.bodyVelocity:Destroy() end
-	if States.bodyGyro then States.bodyGyro:Destroy() end
-	if States.fovCone then States.fovCone:Destroy() end
-	for p, h in pairs(States.espHighlights) do if h then h:Destroy() end end
-	for p, n in pairs(States.espNames) do if n then n:Destroy() end end
-	if States.wallhackActive then
-		for p, t in pairs(OriginalSettings.Transparency) do
-			if p.Parent then p.Transparency = t end
-		end
-	end
-	if States.lowTextureActive then
-		for p, m in pairs(OriginalSettings.Materials) do
-			if p.Parent then p.Material = m end
-		end
-	end
-	Effects.colorCorrection.Saturation = 0
-	Effects.bloom.Intensity = 0
-	PlayerData.camera.FieldOfView = OriginalSettings.FOV
-	Services.Lighting.ClockTime = OriginalSettings.ClockTime
-	PlayerData.player.CameraMaxZoomDistance = OriginalSettings.MaxZoom
-	if PlayerData.humanoid then
-		PlayerData.humanoid.PlatformStand = false
-		PlayerData.humanoid.WalkSpeed = 16
-	end
-	if PlayerData.rootPart then
-		PlayerData.rootPart.Anchored = false
-	end
-	PlayerData.camera.CameraType = Enum.CameraType.Custom
-	if PlayerData.character then
-		PlayerData.camera.CameraSubject = PlayerData.character.Humanoid
-	end
-	local Animate = PlayerData.character and PlayerData.character:FindFirstChild("Animate")
-	if Animate then
-		Animate.Disabled = true
-		StopAnim()
-		local animation1 = Animate.idle:FindFirstChild("Animation1")
-		if animation1 then animation1.AnimationId = DefaultAnimations.idle1 end
-		local animation2 = Animate.idle:FindFirstChild("Animation2")
-		if animation2 then animation2.AnimationId = DefaultAnimations.idle2 end
-		local walkAnim = Animate.walk:FindFirstChild("WalkAnim")
-		if walkAnim then walkAnim.AnimationId = DefaultAnimations.walk end
-		local runAnim = Animate.run:FindFirstChild("RunAnim")
-		if runAnim then runAnim.AnimationId = DefaultAnimations.run end
-		local jumpAnim = Animate.jump:FindFirstChild("JumpAnim")
-		if jumpAnim then jumpAnim.AnimationId = DefaultAnimations.jump end
-		local climbAnim = Animate.climb:FindFirstChild("ClimbAnim")
-		if climbAnim then climbAnim.AnimationId = DefaultAnimations.climb end
-		local fallAnim = Animate.fall:FindFirstChild("FallAnim")
-		if fallAnim then fallAnim.AnimationId = DefaultAnimations.fall end
-		local swimAnim = Animate.swim:FindFirstChild("SwimAnim")
-		if swimAnim then swimAnim.AnimationId = DefaultAnimations.swimAnim end
-		local swimIdle = Animate.swim:FindFirstChild("SwimIdle")
-		if swimIdle then swimIdle.AnimationId = DefaultAnimations.swimIdle end
-		Animate.Disabled = false
-	end
+	unloadScript()
 end)
 
--- Notify user that the script has loaded
-notify("Skye", "Script loaded successfully.", 5)
+notify("Zangetsu", "Script loaded successfully.", 5)
