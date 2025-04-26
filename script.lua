@@ -327,9 +327,32 @@ create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = header})
 create("TextLabel", {Size = UDim2.new(0.7, 0, 0, 40), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Zangetsu", TextColor3 = Colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = header})
 
 -- Stats Display
-local fpsLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.4, 0, -0.2, 0), BackgroundTransparency = 1, Text = "FPS: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
-local pingLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.55, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Ping: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
-local playersLabel = create("TextLabel", {Size = UDim2.new(0.1, 0, 1, 0), Position = UDim2.new(0.7, 0, -0.2, 0), BackgroundTransparency = 1, Text = "Players: 0", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = header})
+if not game:GetService("RunService"):IsStudio() then
+	local statsLabel = create("TextLabel", {
+		Size = UDim2.new(0, 260, 0, 24),
+		Position = UDim2.new(0.5, -130, 0, 8),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = Colors.Text,
+		TextSize = 14,
+		Font = Enum.Font.FredokaOne,
+		Parent = header
+	})
+
+	local frameCount, lastUpdate, fps = 0, tick(), 60
+	Services.RunService.RenderStepped:Connect(function()
+		frameCount = frameCount + 1
+		local now = tick()
+		if now - lastUpdate >= 1 then
+			fps = frameCount
+			frameCount = 0
+			lastUpdate = now
+			local ping = math.floor((game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() or 0) + 0.5)
+			local playerCount = #Services.Players:GetPlayers()
+			statsLabel.Text = string.format("FPS: %d  |  Ping: %dms  |  Players: %d", fps, ping, playerCount)
+		end
+	end)
+end
 
 -- X-Button with confirmation dialog
 local closeBtn = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -25, 0, 5), BackgroundTransparency = 1, Text = "X", TextColor3 = Colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = header})
@@ -1724,27 +1747,6 @@ Services.RunService.RenderStepped:Connect(function(dt)
 		end
 		States.walkAirBodyPosition.Position = Vector3.new(PlayerData.rootPart.Position.X, States.targetY, PlayerData.rootPart.Position.Z)
 		States.walkAirPlatform.Position = Vector3.new(PlayerData.rootPart.Position.X, States.targetY - 3, PlayerData.rootPart.Position.Z)
-	end
-end)
-
--- Ping and FPS update with Heartbeat every 0.2 seconds
-local lastUpdate = tick()
-local updateInterval = 0.2
-local accumulatedTime = 0
-Services.RunService.Heartbeat:Connect(function(dt)
-	accumulatedTime = accumulatedTime + dt
-	if accumulatedTime >= updateInterval then
-		local currentTime = tick()
-		local elapsed = currentTime - lastUpdate
-		local fps = math.floor(frameCount / elapsed)
-		fpsLabel.Text = "FPS: " .. fps
-		frameCount = 0
-		lastUpdate = currentTime
-		local ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
-		pingLabel.Text = "Ping: " .. math.floor(ping)
-		local playerCount = #Services.Players:GetPlayers()
-		playersLabel.Text = "Players: " .. playerCount
-		accumulatedTime = 0
 	end
 end)
 
