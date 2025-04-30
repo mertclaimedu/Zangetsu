@@ -244,6 +244,14 @@ local function addKeybind(name, def, y)
 				keybinds[name] = i.KeyCode == Enum.KeyCode.Escape and nil or i.KeyCode
 				b.Text = keybinds[name] and keybinds[name].Name or "None"
 				c:Disconnect()
+			elseif i.UserInputType == Enum.UserInputType.MouseButton1 or 
+				i.UserInputType == Enum.UserInputType.MouseButton2 or 
+				i.UserInputType == Enum.UserInputType.MouseButton3 or 
+				i.UserInputType == Enum.UserInputType.MouseButton4 or 
+				i.UserInputType == Enum.UserInputType.MouseButton5 then
+				keybinds[name] = i.UserInputType
+				b.Text = i.UserInputType.Name or "None"
+				c:Disconnect()
 			end
 		end)
 	end)
@@ -1203,10 +1211,15 @@ local r = false
 local function toggleMenu() mainFrame.Visible = not mainFrame.Visible end
 UserInputService.InputBegan:Connect(function(i, gp)
 	if gp then return end
-	if keybinds.Menu and i.KeyCode == keybinds.Menu then toggleMenu()
-	elseif keybinds.ESP and i.KeyCode == keybinds.ESP then et(not espActive)
-	elseif keybinds.FreeCam and i.KeyCode == keybinds.FreeCam then fct(not freeCamActive)
-	elseif keybinds.Aimlock and i.KeyCode == keybinds.Aimlock and aimlockActive then
+	local isKeybindMatch = function(keybind, input)
+		return (keybind and ((input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind) or 
+			(input.UserInputType == keybind)))
+	end
+
+	if isKeybindMatch(keybinds.Menu, i) then toggleMenu()
+	elseif isKeybindMatch(keybinds.ESP, i) then et(not espActive)
+	elseif isKeybindMatch(keybinds.FreeCam, i) then fct(not freeCamActive)
+	elseif isKeybindMatch(keybinds.Aimlock, i) and aimlockActive then
 		if aimlockToggleMode then aimlockLocked = not aimlockLocked else lockedTarget = getTargetInFOV() end
 	elseif freeCamActive and i.UserInputType == Enum.UserInputType.MouseButton2 then r = true UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
 	elseif i.KeyCode == Enum.KeyCode.LeftShift or i.KeyCode == Enum.KeyCode.RightShift then freeCamBoost = 2
@@ -1234,15 +1247,27 @@ end)
 
 UserInputService.InputBegan:Connect(function(input, gpe)
 	if gpe then return end
-	if input.UserInputType == Enum.UserInputType.Keyboard then
-		if keybinds.Speed and input.KeyCode == keybinds.Speed then for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(not toggleStates["Speed"]) end
-		elseif keybinds.Fly and input.KeyCode == keybinds.Fly then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(not toggleStates["Fly"]) end end
+	local isKeybindMatch = function(keybind, input)
+		return (keybind and ((input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind) or 
+			(input.UserInputType == keybind)))
+	end
+
+	if isKeybindMatch(keybinds.Speed, input) then 
+		for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(not toggleStates["Speed"]) end
+	elseif isKeybindMatch(keybinds.Fly, input) then 
+		for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(not toggleStates["Fly"]) end 
 	end
 end)
 UserInputService.InputEnded:Connect(function(i)
 	if i.UserInputType == Enum.UserInputType.MouseButton2 then r = false UserInputService.MouseBehavior = Enum.MouseBehavior.Default end
 	if i.KeyCode == Enum.KeyCode.LeftShift or i.KeyCode == Enum.KeyCode.RightShift then freeCamBoost = 1 end
-	if keybinds.Aimlock and i.KeyCode == keybinds.Aimlock and not aimlockToggleMode then lockedTarget = nil end
+
+	local isKeybindMatch = function(keybind, input)
+		return (keybind and ((input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind) or 
+			(input.UserInputType == keybind)))
+	end
+
+	if isKeybindMatch(keybinds.Aimlock, i) and not aimlockToggleMode then lockedTarget = nil end
 end)
 UserInputService.InputChanged:Connect(function(i)
 	if r and i.UserInputType == Enum.UserInputType.MouseMovement and not lockedTarget then
@@ -1254,7 +1279,28 @@ end)
 -- Click Teleport
 local m = player:GetMouse()
 m.Button1Down:Connect(function()
-	if clickTeleportActive and keybinds.ClickTeleport and UserInputService:IsKeyDown(keybinds.ClickTeleport) and rootPart then
+	local isKeybindDown = function(keybind)
+		if not keybind then return false end
+		if keybind.EnumType == Enum.KeyCode then
+			return UserInputService:IsKeyDown(keybind)
+		else
+			-- For mouse buttons, we can't use IsKeyDown, so we need to check differently
+			-- Mouse1 is being handled by the Button1Down event itself
+			if keybind == Enum.UserInputType.MouseButton1 then
+				return true
+			elseif keybind == Enum.UserInputType.MouseButton2 then
+				return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+			elseif keybind == Enum.UserInputType.MouseButton3 then
+				return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton3)
+			else
+				-- For other mouse buttons (4, 5), there's no direct way to check
+				-- So we'll return false for now
+				return false
+			end
+		end
+	end
+
+	if clickTeleportActive and keybinds.ClickTeleport and isKeybindDown(keybinds.ClickTeleport) and rootPart then
 		local targetPos = m.Hit.Position + Vector3.new(0, 3, 0)
 		local cameraLook = camera.CFrame.LookVector
 		local yaw = math.atan2(-cameraLook.X, -cameraLook.Z)
