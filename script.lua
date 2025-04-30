@@ -11,7 +11,15 @@ local aimlockActive, espActive, wallhackActive, lowTextureActive = false, false,
 local silentAimActive, predictionActive = false, false
 local aimlockToggleMode, aimlockLocked = false, false
 local espHighlights, espNames = {}, {}
-local keybinds = {Menu = Enum.KeyCode.G, Aimlock = Enum.KeyCode.Q, ESP = Enum.KeyCode.J, ClickTeleport = Enum.KeyCode.E, Fly = nil, FreeCam = Enum.KeyCode.P, Speed = nil}
+local keybinds = {
+	Menu = {Type = "Keyboard", Value = Enum.KeyCode.G},
+	Aimlock = {Type = "Keyboard", Value = Enum.KeyCode.Q},
+	ESP = {Type = "Keyboard", Value = Enum.KeyCode.J},
+	ClickTeleport = {Type = "Keyboard", Value = Enum.KeyCode.E},
+	Fly = nil,
+	FreeCam = {Type = "Keyboard", Value = Enum.KeyCode.P},
+	Speed = nil
+}
 local aimlockFOV, showFOVCone, fovCone = 150, false, nil
 local speedValue, flySpeedValue, freeCamSpeed = 300, 300, 200
 local speedActive, flyActive, freeCamActive, noclipActive, clickTeleportActive = false, false, false, false, false
@@ -234,15 +242,25 @@ end
 local function addKeybind(name, def, y)
 	local f = create("Frame", {Size = UDim2.new(1, -10, 0, 30), Position = UDim2.new(0, 5, 0, y), BackgroundTransparency = 1, Parent = keybindsScroll})
 	create("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), BackgroundTransparency = 1, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = f})
-	local b = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(1, -65, 0.5, -10), BackgroundColor3 = colors.Button, Text = def and def.Name or "None", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = f})
+	local b = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(1, -65, 0.5, -10), BackgroundColor3 = colors.Button, Text = def and def.Value.Name or "None", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = f})
 	create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = b})
 	b.MouseButton1Click:Connect(function()
 		b.Text = "Press..."
 		local c
 		c = UserInputService.InputBegan:Connect(function(i)
 			if i.UserInputType == Enum.UserInputType.Keyboard then
-				keybinds[name] = i.KeyCode == Enum.KeyCode.Escape and nil or i.KeyCode
-				b.Text = keybinds[name] and keybinds[name].Name or "None"
+				if i.KeyCode == Enum.KeyCode.Escape then
+					keybinds[name] = nil
+					b.Text = "None"
+				else
+					keybinds[name] = {Type = "Keyboard", Value = i.KeyCode}
+					b.Text = i.KeyCode.Name
+				end
+			elseif i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.MouseButton2 or i.UserInputType == Enum.UserInputType.MouseButton3 then
+				keybinds[name] = {Type = "MouseButton", Value = i.UserInputType}
+				b.Text = i.UserInputType.Name
+			end
+			if keybinds[name] or i.KeyCode == Enum.KeyCode.Escape then
 				c:Disconnect()
 			end
 		end)
@@ -371,8 +389,6 @@ addToggle("Wallhack", false, 200, function(on)
 				v.Transparency = 0.7
 			end
 		end
-
-
 	else
 		for p, t in pairs(originalSettings.Transparency) do if p.Parent then p.Transparency = t else originalSettings.Transparency[p] = nil end end
 	end
@@ -1100,6 +1116,27 @@ UserInputService.InputEnded:Connect(function(input) if input.UserInputType == En
 tabs["Visuals"].BackgroundColor3 = colors.TabSelected
 tabContents["Visuals"].Visible = true
 
+-- Helper Functions for Keybinds
+local function isKeybindPressed(keybind, input)
+	if not keybind then return false end
+	if keybind.Type == "Keyboard" and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind.Value then
+		return true
+	elseif keybind.Type == "MouseButton" and input.UserInputType == keybind.Value then
+		return true
+	end
+	return false
+end
+
+local function isKeybindDown(keybind)
+	if not keybind then return false end
+	if keybind.Type == "Keyboard" then
+		return UserInputService:IsKeyDown(keybind.Value)
+	elseif keybind.Type == "MouseButton" then
+		return UserInputService:IsMouseButtonPressed(keybind.Value)
+	end
+	return false
+end
+
 -- Main Loop
 RunService.RenderStepped:Connect(function(dt)
 	if not character or not rootPart then return end
@@ -1109,7 +1146,7 @@ RunService.RenderStepped:Connect(function(dt)
 	if aimlockActive then
 		local t = lockedTarget or getTargetInFOV()
 		if t then
-			if aimlockToggleMode then if aimlockLocked then lockedTarget = t else lockedTarget = nil end else lockedTarget = UserInputService:IsKeyDown(keybinds.Aimlock) and t or nil end
+			if aimlockToggleMode then if aimlockLocked then lockedTarget = t else lockedTarget = nil end else lockedTarget = isKeybindDown(keybinds.Aimlock) and t or nil end
 			if lockedTarget then
 				local tp = predictionActive and predictTargetPosition(lockedTarget, dt) or lockedTarget.Position
 				local tc = CFrame.new(cf.Position, tp)
@@ -1203,10 +1240,10 @@ local r = false
 local function toggleMenu() mainFrame.Visible = not mainFrame.Visible end
 UserInputService.InputBegan:Connect(function(i, gp)
 	if gp then return end
-	if keybinds.Menu and i.KeyCode == keybinds.Menu then toggleMenu()
-	elseif keybinds.ESP and i.KeyCode == keybinds.ESP then et(not espActive)
-	elseif keybinds.FreeCam and i.KeyCode == keybinds.FreeCam then fct(not freeCamActive)
-	elseif keybinds.Aimlock and i.KeyCode == keybinds.Aimlock and aimlockActive then
+	if keybinds.Menu and isKeybindPressed(keybinds.Menu, i) then toggleMenu()
+	elseif keybinds.ESP and isKeybindPressed(keybinds.ESP, i) then et(not espActive)
+	elseif keybinds.FreeCam and isKeybindPressed(keybinds.FreeCam, i) then fct(not freeCamActive)
+	elseif keybinds.Aimlock and isKeybindPressed(keybinds.Aimlock, i) and aimlockActive then
 		if aimlockToggleMode then aimlockLocked = not aimlockLocked else lockedTarget = getTargetInFOV() end
 	elseif freeCamActive and i.UserInputType == Enum.UserInputType.MouseButton2 then r = true UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
 	elseif i.KeyCode == Enum.KeyCode.LeftShift or i.KeyCode == Enum.KeyCode.RightShift then freeCamBoost = 2
@@ -1234,15 +1271,16 @@ end)
 
 UserInputService.InputBegan:Connect(function(input, gpe)
 	if gpe then return end
-	if input.UserInputType == Enum.UserInputType.Keyboard then
-		if keybinds.Speed and input.KeyCode == keybinds.Speed then for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(not toggleStates["Speed"]) end
-		elseif keybinds.Fly and input.KeyCode == keybinds.Fly then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(not toggleStates["Fly"]) end end
+	if keybinds.Speed and isKeybindPressed(keybinds.Speed, input) then
+		for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(not toggleStates["Speed"]) end
+	elseif keybinds.Fly and isKeybindPressed(keybinds.Fly, input) then
+		for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(not toggleStates["Fly"]) end
 	end
 end)
 UserInputService.InputEnded:Connect(function(i)
 	if i.UserInputType == Enum.UserInputType.MouseButton2 then r = false UserInputService.MouseBehavior = Enum.MouseBehavior.Default end
 	if i.KeyCode == Enum.KeyCode.LeftShift or i.KeyCode == Enum.KeyCode.RightShift then freeCamBoost = 1 end
-	if keybinds.Aimlock and i.KeyCode == keybinds.Aimlock and not aimlockToggleMode then lockedTarget = nil end
+	if keybinds.Aimlock and isKeybindPressed(keybinds.Aimlock, i) and not aimlockToggleMode then lockedTarget = nil end
 end)
 UserInputService.InputChanged:Connect(function(i)
 	if r and i.UserInputType == Enum.UserInputType.MouseMovement and not lockedTarget then
@@ -1254,7 +1292,7 @@ end)
 -- Click Teleport
 local m = player:GetMouse()
 m.Button1Down:Connect(function()
-	if clickTeleportActive and keybinds.ClickTeleport and UserInputService:IsKeyDown(keybinds.ClickTeleport) and rootPart then
+	if clickTeleportActive and keybinds.ClickTeleport and isKeybindDown(keybinds.ClickTeleport) and rootPart then
 		local targetPos = m.Hit.Position + Vector3.new(0, 3, 0)
 		local cameraLook = camera.CFrame.LookVector
 		local yaw = math.atan2(-cameraLook.X, -cameraLook.Z)
