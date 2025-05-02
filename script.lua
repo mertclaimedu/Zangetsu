@@ -52,6 +52,7 @@ local loadAllToggle = false
 -- Headbang Variables
 local headbangActive, headbangTarget, headbangConn, lastPos = false, nil, nil, nil
 local minDist, maxDist, speed = 1, 4, 20
+local headbangHeightOffset = 1.38
 local headbangEnabled = false
 
 -- File System Functions
@@ -128,7 +129,9 @@ local function attach()
 	local head = headbangTarget.Character.Head
 	local t = (math.sin(tick() * speed) + 1) / 2
 	local dist = minDist + (maxDist - minDist) * t
-	rootPart.CFrame = CFrame.new(head.CFrame.Position + head.CFrame.LookVector * dist, head.CFrame.Position)
+	local basePos = head.CFrame.Position + Vector3.new(0, headbangHeightOffset, 0)
+	local targetPos = basePos + head.CFrame.LookVector * dist
+	rootPart.CFrame = CFrame.new(targetPos, basePos)
 end
 
 local function startHeadbang()
@@ -520,7 +523,7 @@ local ff, flyToggle = addToggle("Fly", false, 40, function(on)
 		if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
 	end
 end, playerTab)
-local fsi = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0, 280, 0, 10), BackgroundColor3 = colors.Button, Text = tostring(flySpeedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = ff})
+local fsi = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(flySpeedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = ff})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = fsi})
 fsi.FocusLost:Connect(function(e) if e then local v = tonumber(fsi.Text) if v then flySpeedValue = math.clamp(v, 50, 50000) end end end)
 addToggle("Noclip", false, 80, function(on) noclipActive = on end, playerTab)
@@ -564,6 +567,9 @@ addActionButton("Jerk", 270, y, function()
 end, playerTab, 120)
 y = y + 45
 -- Headbang text boxes
+local heightOffsetBox = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 220, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(headbangHeightOffset), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = heightOffsetBox})
+heightOffsetBox.FocusLost:Connect(function(e) if e then local v = tonumber(heightOffsetBox.Text) if v then headbangHeightOffset = v end end end)
 local minDistBox = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 280, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(minDist), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = minDistBox})
 minDistBox.FocusLost:Connect(function(e) if e then local v = tonumber(minDistBox.Text) if v then minDist = v end end end)
@@ -578,14 +584,13 @@ RunService.RenderStepped:Connect(function() if spinEnabled and character and roo
 
 -- Combat Tab
 local af, at = addToggle("Aimlock", false, 0, function(on) aimlockActive = on if not on then lockedTarget = nil aimlockLocked = false end end, combatTab)
-local asf = create("Frame", {Size = UDim2.new(1, 0, 0, 200), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = combatTab})
-local pb, pt = addButton("Prediction", 0, 0, function(s) predictionActive = s end, asf, false, 80)
-local thb, tht = addButton("Toggle", 90, 0, function(s) aimlockToggleMode = s thb.Text = s and "Toggle" or "Hold" lockedTarget = nil aimlockLocked = false end, asf, false, 80)
-local hb, ht = addButton("Head", 180, 0, function(s) aimlockTargetPart = aimlockTargetPart == "Head" and "Torso" or "Head" lockedTarget = nil hb.Text = aimlockTargetPart end, asf, true, 80)
-local fovFrame = addSlider("Aimlock FOV", 30, 320, aimlockFOV, 35, function(v)
+local pb, pt = addButton("Prediction", 270, 10, function(s) predictionActive = s end, combatTab, false, 80)
+local thb, tht = addButton("Toggle", 355, 10, function(s) aimlockToggleMode = s thb.Text = s and "Toggle" or "Hold" lockedTarget = nil aimlockLocked = false end, combatTab, false, 80)
+local hb, ht = addButton("Head", 185, 10, function(s) aimlockTargetPart = aimlockTargetPart == "Head" and "Torso" or "Head" lockedTarget = nil hb.Text = aimlockTargetPart end, combatTab, true, 80)
+local fovFrame = addSlider("Aimlock FOV", 30, 320, aimlockFOV, 40, function(v)
 	aimlockFOV = v
 	if fovCone then fovCone.Size = UDim2.new(0, v * 2, 0, v * 2) fovCone.Position = UDim2.new(0.5, -v, 0.5, -v) end
-end, asf, false, true)
+end, combatTab, false, true)
 local fovLockBtn = create("ImageButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0, 110, 0.5, -10), BackgroundColor3 = colors.Button, Image = "rbxassetid://6023565895", ImageColor3 = colors.Text, Parent = fovFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = fovLockBtn})
 fovLockBtn.MouseButton1Click:Connect(function()
@@ -1191,7 +1196,8 @@ function serializeConfig()
 			FlySpeedValue = flySpeedValue,
 			HeadbangMinDist = minDist,
 			HeadbangMaxDist = maxDist,
-			HeadbangSpeed = speed
+			HeadbangSpeed = speed,
+			HeadbangHeightOffset = headbangHeightOffset
 		},
 		ui = {Transparency = sliderValues["Transparency"]}
 	})
@@ -1222,11 +1228,13 @@ function applyConfig(jsonStr)
 		minDist = config.player.HeadbangMinDist or minDist
 		maxDist = config.player.HeadbangMaxDist or maxDist
 		speed = config.player.HeadbangSpeed or speed
+		headbangHeightOffset = config.player.HeadbangHeightOffset or headbangHeightOffset
 		csi.Text = tostring(speedValue)
 		fsi.Text = tostring(flySpeedValue)
 		minDistBox.Text = tostring(minDist)
 		maxDistBox.Text = tostring(maxDist)
 		speedBox.Text = tostring(speed)
+		heightOffsetBox.Text = tostring(headbangHeightOffset)
 	end
 	if config.ui and config.ui.Transparency then
 		sliderValues["Transparency"] = config.ui.Transparency
