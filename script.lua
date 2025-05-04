@@ -1,33 +1,76 @@
-local Players, Lighting, UserInputService, RunService = game:GetService("Players"), game:GetService("Lighting"), game:GetService("UserInputService"), game:GetService("RunService")
+-- Services
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 local Stats = game:GetService("Stats")
-local player, camera = Players.LocalPlayer, workspace.CurrentCamera
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local VoiceChatService = game:GetService("VoiceChatService")
+local StarterGui = game:GetService("StarterGui")
+
+-- Player and Camera References
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
 local character, rootPart, humanoid
+
+-- Original Settings
 local originalSettings = {MaxZoom = player.CameraMaxZoomDistance, FOV = camera.FieldOfView, ClockTime = Lighting.ClockTime, Materials = {}, Transparency = {}}
 local colorCorrection = Lighting:FindFirstChild("CustomColorCorrection") or Instance.new("ColorCorrectionEffect", Lighting) colorCorrection.Name = "CustomColorCorrection"
+
+-- Animation State
 local defaultAnimations = {}
 local animationSpeedMultiplier = 1
 local originalAnimationSpeed = 1
+local customAnimSpeedEnabled = false
+
+-- Feature States
 local aimlockActive, espActive, wallhackActive, lowTextureActive = false, false, false, false
 local predictionActive = false
 local aimlockToggleMode, aimlockLocked = false, false
 local espHighlights, espNames = {}, {}
-local keybinds = {
-	Menu = {Type = "Keyboard", Value = Enum.KeyCode.G},
-	Aimlock = nil,
-	ESP = nil,
-	ClickTeleport = nil,
-	Fly = nil,
-	Speed = nil,
-	Headbang = nil
-}
-local aimlockFOV, showFOVCone, fovCone = 150, false, nil
-local speedValue, flySpeedValue = 300, 300
 local speedActive, flyActive, noclipActive, clickTeleportActive = false, false, false, false
-local lockedTarget, targetedPlayer
-local aimlockTargetPart = "Head"
-local menuTransparency = 0.1
+local infiniteJumpEnabled = false
+local spinEnabled = false
 local timeLocked = false
-local bodyVelocity, bodyGyro
+local viewActive = false
+local flingActive = false
+local bangActive = false
+local headsitActive = false
+local standActive = false
+local backpackActive = false
+local doggyActive = false
+local dragActive = false
+
+-- Headbang State
+local isHeadbangActive = false
+local headbangTarget = nil
+local noclipParts = {}
+local headbangConn = nil
+local lastPos = nil
+
+-- Feature Parameters
+local aimlockFOV = 150
+local showFOVCone = false
+local fovCone = nil
+local speedValue = 300
+local flySpeedValue = 300
+local spinSpeed = 5
+local aimlockTargetPart = "Head"
+
+-- Headbang Parameters
+local minDist = 1.5
+local maxDist = 4
+local speed = 20
+local headbangHeightOffset = 1.38
+local headbangEnabled = false
+
+-- Target State
+local lockedTarget = nil
+local targetedPlayer = nil
+
+-- GUI State
+local menuTransparency = 0.1
 local colors = {
 	Background = Color3.fromRGB(0, 0, 0),
 	Header = Color3.fromRGB(49, 49, 49),
@@ -44,16 +87,23 @@ local colors = {
 }
 local sliderValues = {}
 local toggleStates = {}
+local buttonStates = {}
+
+-- Keybinds
+local keybinds = {
+	Menu = {Type = "Keyboard", Value = Enum.KeyCode.G},
+	Aimlock = nil,
+	ESP = nil,
+	ClickTeleport = nil,
+	Fly = nil,
+	Speed = nil,
+	Headbang = nil
+}
+
+-- Cached Data
 local cachedPlayers = Players:GetPlayers()
 local seenPlayers = {}
 local httprequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-local loadAllToggle = false
-
--- Headbang Variables
-local headbangActive, headbangTarget, headbangConn, lastPos = false, nil, nil, nil
-local minDist, maxDist, speed = 1, 4, 20
-local headbangHeightOffset = 1.38
-local headbangEnabled = false
 
 -- File System Functions
 local isfolder = isfolder or syn and syn.isfolder or fluxus and fluxus.isfolder or function() return false end
@@ -64,10 +114,7 @@ local writefile = writefile or syn and syn.writefile or fluxus and fluxus.writef
 local delfile = delfile or syn and syn.delfile or fluxus and fluxus.delfile or function() end
 local listfiles = listfiles or syn and syn.listfiles or fluxus and fluxus.listfiles or function() return {} end
 
--- Ensure ZangetsuConfig folder exists
-if not isfolder("ZangetsuConfig") then
-	pcall(function() makefolder("ZangetsuConfig") end)
-end
+if not isfolder("ZangetsuConfig") then pcall(function() makefolder("ZangetsuConfig") end) end
 
 -- Utility Functions
 local function create(class, props) local inst = Instance.new(class) for k, v in pairs(props) do inst[k] = v end return inst end
@@ -83,17 +130,15 @@ local function getMovement(cf, vert)
 	end
 	return dir
 end
-local function clampPosition(pos)
-	local b = 10000
-	return Vector3.new(math.clamp(pos.X, -b, b), math.clamp(pos.Y, -b, b), math.clamp(pos.Z, -b, b))
-end
-local function notify(title, message, duration)
-	game:GetService("StarterGui"):SetCore("SendNotification", {Title = title, Text = message, Duration = duration})
-end
+local function notify(title, message, duration) StarterGui:SetCore("SendNotification", {Title = title, Text = message, Duration = duration}) end
 local function PlayAnim(id, time, speed)
 	pcall(function()
+		if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("Animate") then return end
+		local Animate = character.Animate
 		local hum = character.Humanoid
+		Animate.Disabled = false
 		for _, track in pairs(hum:GetPlayingAnimationTracks()) do track:Stop() end
+		Animate.Disabled = true
 		local Anim = Instance.new("Animation")
 		Anim.AnimationId = "rbxassetid://" .. id
 		local loadanim = hum:LoadAnimation(Anim)
@@ -101,65 +146,122 @@ local function PlayAnim(id, time, speed)
 		loadanim.TimePosition = time
 		loadanim:AdjustSpeed(speed)
 		loadanim.Stopped:Connect(function()
+			Animate.Disabled = false
 			for _, track in pairs(hum:GetPlayingAnimationTracks()) do track:Stop() end
 		end)
 	end)
 end
 local function StopAnim()
-	for _, track in pairs(character.Humanoid:GetPlayingAnimationTracks()) do track:Stop() end
+	pcall(function()
+		if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("Animate") then return end
+		local Animate = character.Animate
+		Animate.Disabled = false
+		for _, track in pairs(character.Humanoid:GetPlayingAnimationTracks()) do track:Stop() end
+	end)
 end
 
--- Headbang Functions
-local function findNearest()
-	local closest, dist = nil, math.huge
-	for _, p in pairs(Players:GetPlayers()) do
-		if p ~= player and p.Character and p.Character:FindFirstChild("Head") then
-			local d = (rootPart.Position - p.Character.Head.Position).Magnitude
-			if d < dist then dist, closest = d, p end
+local function updateNoclip(enable)
+	if not character then return end
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if enable then
+				noclipParts[part] = true
+				part.CanCollide = false
+				part.Velocity = Vector3.zero
+			elseif noclipParts[part] then
+				part.CanCollide = true
+				noclipParts[part] = nil
+			end
 		end
 	end
-	return closest
 end
 
-local function attach()
-	if not headbangTarget or not headbangTarget.Character or not headbangTarget.Character:FindFirstChild("Head") then
-		headbangActive = false
+local function findNearestPlayer()
+	local closestPlayer, minDistance = nil, math.huge
+	if not rootPart then return nil end
+	local myPosition = rootPart.Position
+
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+		if otherPlayer ~= player and otherPlayer.Character then
+			local theirRootPart = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if theirRootPart then
+				local distance = (myPosition - theirRootPart.Position).Magnitude
+				if distance < minDistance then
+					closestPlayer, minDistance = otherPlayer, distance
+				end
+			end
+		end
+	end
+	return closestPlayer
+end
+
+local function updateHeadbangPosition()
+	if not isHeadbangActive or not headbangTarget or not headbangTarget.Character then
+		stopHeadbang()
 		return
 	end
-	local head = headbangTarget.Character.Head
-	local t = (math.sin(tick() * speed) + 1) / 2
-	local dist = minDist + (maxDist - minDist) * t
-	local basePos = head.CFrame.Position + Vector3.new(0, headbangHeightOffset, 0)
-	local targetPos = basePos + head.CFrame.LookVector * dist
-	rootPart.CFrame = CFrame.new(targetPos, basePos)
-end
 
-local function startHeadbang()
-	if not rootPart or not humanoid then return end
-	headbangTarget = findNearest()
-	if headbangTarget and headbangTarget.Character and headbangTarget.Character:FindFirstChild("Head") then
-		headbangActive = true
-		lastPos = rootPart.Position
-		rootPart.Anchored = true
-		humanoid.PlatformStand = true
-		headbangConn = RunService.Heartbeat:Connect(function()
-			if headbangActive then
-				attach()
-			else
-				headbangConn:Disconnect()
-			end
-		end)
-	else
-		headbangActive = false
+	local targetHead = headbangTarget.Character:FindFirstChild("Head")
+	local targetRootPart = headbangTarget.Character:FindFirstChild("HumanoidRootPart")
+
+	if not targetHead or not targetRootPart then
+		stopHeadbang()
+		return
+	end
+
+	local basePosition = targetHead.Position + Vector3.new(0, headbangHeightOffset, 0)
+	local oscillation = (math.sin(tick() * speed) + 1) / 2
+	local currentDistance = minDist + (maxDist - minDist) * oscillation
+
+	local targetPosition = basePosition + targetRootPart.CFrame.LookVector * currentDistance
+
+	if rootPart then
+		rootPart.CFrame = CFrame.new(targetPosition, basePosition)
+		rootPart.Velocity = Vector3.zero
+		rootPart.RotVelocity = Vector3.zero
 	end
 end
 
 local function stopHeadbang()
-	headbangActive = false
+	if not isHeadbangActive then return end
+	isHeadbangActive = false
+	headbangTarget = nil
 	if headbangConn then headbangConn:Disconnect() headbangConn = nil end
-	if rootPart then rootPart.Anchored = false end
-	if humanoid then humanoid.PlatformStand = false end
-	if lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+	updateNoclip(false)
+	if humanoid then
+		humanoid.PlatformStand = false
+		pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+	end
+	if rootPart then
+		rootPart.Velocity = Vector3.zero
+		rootPart.RotVelocity = Vector3.zero
+		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+	end
+	lastPos = nil
+end
+
+local function startHeadbang()
+	if isHeadbangActive then return end
+
+	local nearestPlayer = findNearestPlayer()
+
+	if nearestPlayer then
+		headbangTarget = nearestPlayer
+		if rootPart then lastPos = rootPart.Position end
+		isHeadbangActive = true
+		updateNoclip(true)
+		if humanoid then humanoid.PlatformStand = true end
+
+		if not headbangConn then
+			headbangConn = RunService.Heartbeat:Connect(function()
+				if isHeadbangActive then
+					updateHeadbangPosition()
+				end
+			end)
+		end
+	else
+		notify("Headbang", "No nearby player found.", 3)
+	end
 end
 
 -- GUI Setup
@@ -171,7 +273,6 @@ local header = create("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 
 create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = header})
 create("TextLabel", {Size = UDim2.new(0.7, 0, 0, 40), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Zangetsu", TextColor3 = colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = header})
 
--- FPS, Ping, Player Counter
 if not RunService:IsStudio() then
 	local statsLabel = create("TextLabel", {Size = UDim2.new(0, 260, 0, 24), Position = UDim2.new(0.5, -130, 0, 8), BackgroundTransparency = 1, Text = "", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = header})
 	local frameCount, lastUpdate, fps = 0, tick(), 60
@@ -189,7 +290,6 @@ if not RunService:IsStudio() then
 	end)
 end
 
--- Tab System
 local tabFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = mainFrame})
 local uiListLayout = create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 5), Parent = tabFrame})
 local tabs, tabContents = {}, {}
@@ -220,26 +320,48 @@ local keybindsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -10, 1, -10
 local function toggleKeybindsFrame() keybindsFrame.Visible = not keybindsFrame.Visible end
 create("ImageButton", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -68, 0, 8), BackgroundTransparency = 1, Image = "rbxassetid://6023565895", ImageColor3 = colors.Text, Parent = header}).MouseButton1Click:Connect(toggleKeybindsFrame)
 
--- Close Buttons
 local closeBtn = create("TextLabel", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -104, 0, 8), BackgroundTransparency = 1, Text = "-", TextColor3 = colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, Parent = header})
 closeBtn.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then mainFrame.Visible = false end end)
 local xBtn = create("ImageButton", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -34, 0, 8), BackgroundTransparency = 1, Image = "rbxassetid://6031094678", ImageColor3 = Color3.fromRGB(220, 50, 50), Parent = header})
 local confirmFrame = create("Frame", {Size = UDim2.new(0, 220, 0, 100), Position = UDim2.new(0.5, -110, 0.5, -50), BackgroundColor3 = colors.Header, Visible = false, Parent = gui})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = confirmFrame})
-create("TextLabel", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 10), BackgroundTransparency = 1, Text = "Are you sure u want to close?", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, Parent = confirmFrame})
+create("TextLabel", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 10), BackgroundTransparency = 1, Text = "Are you sure u want to close?", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = confirmFrame})
 local yesBtn = create("TextButton", {Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(0, 20, 0, 55), BackgroundColor3 = Color3.fromRGB(200, 50, 50), Text = "Yes", TextColor3 = colors.Text, Parent = confirmFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = yesBtn})
 local noBtn = create("TextButton", {Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(0, 120, 0, 55), BackgroundColor3 = Color3.fromRGB(50, 200, 50), Text = "No", TextColor3 = colors.Text, Parent = confirmFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = noBtn})
 local function cleanupMenu()
 	if gui then gui:Destroy() end
 	keybinds = {}
 	espActive = false
 	wallhackActive = false
-	for p in pairs(espHighlights) do if espHighlights[p] then espHighlights[p]:Destroy() end end
-	for p in pairs(espNames) do if espNames[p] then espNames[p]:Destroy() end end
+	for p in pairs(espHighlights) do if espHighlights[p] then espHighlights[p]:Destroy() end espHighlights[p] = nil end
+	for p in pairs(espNames) do if espNames[p] then espNames[p]:Destroy() end espNames[p] = nil end
+	stopHeadbang()
+	if fovCone then fovCone:Destroy() fovCone = nil end
+	if colorCorrection then colorCorrection:Destroy() colorCorrection = nil end
+	if rootPart and rootPart:FindFirstChild("BreakVelocity") then rootPart.BreakVelocity:Destroy() end
+	if character and humanoid then
+		humanoid.PlatformStand = false
+		humanoid.Sit = false
+		pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+	end
+	if rootPart then
+		rootPart.Velocity = Vector3.zero
+		rootPart.RotVelocity = Vector3.zero
+		rootPart.Anchored = false
+	end
+	updateNoclip(false)
+	player.CameraMaxZoomDistance = originalSettings.MaxZoom
+	camera.FieldOfView = originalSettings.FOV
+	Lighting.ClockTime = originalSettings.ClockTime
+	for p, t in pairs(originalSettings.Transparency) do if p.Parent then p.Transparency = t end end
+	for p, m in pairs(originalSettings.Materials) do if p.Parent then p.Material = m end end
+	resetAnimations()
 end
 yesBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = false cleanupMenu() end)
 noBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = false end)
-xBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = true for name, upd in pairs(toggleCallbacks) do for _, cb in pairs(upd) do cb(false) end end end)
+xBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = true for name, upd in pairs(toggleCallbacks) do for _, cb in pairs(upd) do cb(false) end end for name, upd in pairs(buttonCallbacks) do for _, cb in pairs(upd) do cb(false) end end end)
 
 -- UI Element Functions
 local toggleCallbacks = {}
@@ -291,18 +413,18 @@ local function addSlider(name, min, max, def, y, cb, parent, nl, nd)
 end
 local buttonCallbacks = {}
 local function addButton(name, x, y, cb, parent, ts, w)
-	local b = create("TextButton", {Size = UDim2.new(0, w or 120, 0, 25), Position = UDim2.new(0, x, 0, y), BackgroundColor3 = ts and colors.ToggleOn or colors.ToggleOff, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = parent})
+	buttonStates[name] = ts or false
+	local b = create("TextButton", {Size = UDim2.new(0, w or 120, 0, 25), Position = UDim2.new(0, x, 0, y), BackgroundColor3 = buttonStates[name] and colors.ToggleOn or colors.ToggleOff, Text = buttonStates[name] and name:gsub("(.+)", "Un%1") or name:gsub("Un(.+)", "%1"), TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = parent})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = b})
-	local s = ts or false
 	buttonCallbacks[name] = buttonCallbacks[name] or {}
 	table.insert(buttonCallbacks[name], function(state)
-		s = state
-		b.BackgroundColor3 = s and colors.ToggleOn or colors.ToggleOff
-		b.Text = s and name:gsub("(.+)", "Un%1") or name:gsub("Un(.+)", "%1")
-		cb(s)
+		buttonStates[name] = state
+		b.BackgroundColor3 = state and colors.ToggleOn or colors.ToggleOff
+		b.Text = state and name:gsub("(.+)", "Un%1") or name:gsub("Un(.+)", "%1")
+		cb(state)
 	end)
 	local function upd(ns) for _, c in pairs(buttonCallbacks[name]) do c(ns) end end
-	b.MouseButton1Click:Connect(function() upd(not s) end)
+	b.MouseButton1Click:Connect(function() upd(not buttonStates[name]) end)
 	return b, upd
 end
 local function addActionButton(name, x, y, cb, parent, w)
@@ -313,6 +435,7 @@ local function addActionButton(name, x, y, cb, parent, w)
 end
 local keybindButtons = {}
 local function addKeybind(name, def, y)
+	keybinds[name] = def
 	local f = create("Frame", {Size = UDim2.new(1, -10, 0, 30), Position = UDim2.new(0, 5, 0, y), BackgroundTransparency = 1, Parent = keybindsScroll})
 	create("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), BackgroundTransparency = 1, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = f})
 	local b = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(1, -65, 0.5, -10), BackgroundColor3 = colors.Button, Text = def and def.Value.Name or "None", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = f})
@@ -346,7 +469,7 @@ local function addVoiceChatUnban(y, p)
 	local b = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(0.85, -16, 0.5, -10), BackgroundColor3 = colors.Interface, Text = "Start", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = f})
 	create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = b})
 	b.MouseButton1Click:Connect(function()
-		pcall(function() game:GetService("VoiceChatService"):joinVoice() end)
+		pcall(function() VoiceChatService:joinVoice() end)
 		b.Text = "Done"
 		b.BackgroundColor3 = colors.ToggleOn
 		b.Active = false
@@ -443,6 +566,7 @@ Players.PlayerRemoving:Connect(function(p)
 	if espHighlights[p] then espHighlights[p]:Destroy() espHighlights[p] = nil end
 	if espNames[p] then espNames[p]:Destroy() espNames[p] = nil end
 	if p == headbangTarget then stopHeadbang() end
+	if p == targetedPlayer then targetedPlayer = nil end
 end)
 
 -- Visuals Tab
@@ -468,7 +592,6 @@ local function updateESPColor(newColor)
 	end
 	updateESP()
 end
-espColorBtn.MouseButton1Click:Connect(function() openColorPicker() end)
 addToggle("Infinite Zoom", false, 160, function(on) player.CameraMaxZoomDistance = on and 10000000 or originalSettings.MaxZoom end, visualsTab)
 addToggle("Wallhack", false, 200, function(on)
 	wallhackActive = on
@@ -499,7 +622,7 @@ end, visualsTab)
 visualsTab.CanvasSize = UDim2.new(0, 0, 0, 290)
 
 -- Player Tab
-local csf, cst = addToggle("Speed", false, 0, function(on) if not rootPart then return end if on and flyActive then flyToggle(false) end speedActive = on end, playerTab)
+local csf, cst = addToggle("Speed", false, 0, function(on) if not rootPart then return end if on and flyActive then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end end speedActive = on end, playerTab)
 local csi = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(speedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = csf})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = csi})
 csi.FocusLost:Connect(function(e) if e then local v = tonumber(csi.Text) if v then speedValue = math.clamp(v, 50, 50000) end end end)
@@ -509,15 +632,17 @@ local ff, flyToggle = addToggle("Fly", false, 40, function(on)
 	flyActive = on
 	humanoid.PlatformStand = on
 	if on then
-		bodyVelocity = bodyVelocity or Instance.new("BodyVelocity")
-		bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-		bodyVelocity.Velocity = Vector3.new()
-		bodyVelocity.Parent = rootPart
-		bodyGyro = bodyGyro or Instance.new("BodyGyro")
-		bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-		bodyGyro.P = 20000
-		bodyGyro.D = 100
-		bodyGyro.Parent = rootPart
+		local bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bv.Velocity = Vector3.new()
+		bv.Parent = rootPart
+		local bg = Instance.new("BodyGyro")
+		bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		bg.P = 20000
+		bg.D = 100
+		bg.Parent = rootPart
+		bodyVelocity = bv
+		bodyGyro = bg
 	else
 		if bodyVelocity then bodyVelocity:Destroy() bodyVelocity = nil end
 		if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
@@ -529,25 +654,20 @@ fsi.FocusLost:Connect(function(e) if e then local v = tonumber(fsi.Text) if v th
 addToggle("Noclip", false, 80, function(on) noclipActive = on end, playerTab)
 local y = 120
 addToggle("Click Teleport", false, y, function(on) clickTeleportActive = on end, playerTab) y = y + 45
-local infiniteJumpEnabled = false
 addToggle("Infinite Jump", false, y, function(state) infiniteJumpEnabled = state end, playerTab) y = y + 45
 local headbangFrame, headbangToggle = addToggle("Headbang", false, y, function(on)
 	headbangEnabled = on
-	if not on and headbangActive then
-		stopHeadbang()
-	end
+	if not on and isHeadbangActive then stopHeadbang() end
 end, playerTab) y = y + 45
-local spinEnabled = false
 addToggle("Spin", false, y, function(state) spinEnabled = state end, playerTab) y = y + 45
-local spinSpeed = 5
 addSlider("Spin Speed", 0, 100, 5, y, function(val) spinSpeed = val end, playerTab, false, true) y = y + 45
 addVoiceChatUnban(y, playerTab) y = y + 45
-addActionButton("Rejoin", 10, y, function() game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, player) end, playerTab, 120)
+addActionButton("Rejoin", 10, y, function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player) end, playerTab, 120)
 addActionButton("Server Hop", 140, y, function()
 	if httprequest then
 		local servers = {}
 		local req = httprequest({ Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId) })
-		local body = game:GetService("HttpService"):JSONDecode(req.Body)
+		local body = HttpService:JSONDecode(req.Body)
 		if body and body.data then
 			for _, v in next, body.data do
 				if type(v) == "table" and tonumber(v.playing) and tonumber(v.maxPlayers) and v.playing < v.maxPlayers and v.id ~= game.JobId then
@@ -555,7 +675,7 @@ addActionButton("Server Hop", 140, y, function()
 				end
 			end
 		end
-		if #servers > 0 then game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)], player) end
+		if #servers > 0 then TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)], player) end
 	end
 end, playerTab, 120)
 addActionButton("Jerk", 270, y, function()
@@ -566,7 +686,6 @@ addActionButton("Jerk", 270, y, function()
 	if jerkScript then jerkScript() end
 end, playerTab, 120)
 y = y + 45
--- Headbang text boxes
 local heightOffsetBox = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 220, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(headbangHeightOffset), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangFrame})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = heightOffsetBox})
 heightOffsetBox.FocusLost:Connect(function(e) if e then local v = tonumber(heightOffsetBox.Text) if v then headbangHeightOffset = v end end end)
@@ -612,7 +731,6 @@ local clickTargetBtn = create("ImageButton", {Size = UDim2.new(0, 30, 0, 30), Po
 local targetImage = create("ImageLabel", {Size = UDim2.new(0, 100, 0, 100), Position = UDim2.new(0, 10, 0, 50), BackgroundColor3 = colors.Background, Image = "rbxassetid://10818605405", Parent = targetTab})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = targetImage})
 local userInfoLabel = create("TextLabel", {Size = UDim2.new(0, 200, 0, 75), Position = UDim2.new(0, 120, 0, 50), BackgroundTransparency = 1, Text = "UserID: \nDisplay: \nJoined: ", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = targetTab})
-local viewActive = false
 local viewBtn, viewToggle = addButton("View", 10, 160, function(s)
 	viewActive = s
 	if s then
@@ -629,43 +747,34 @@ local viewBtn, viewToggle = addButton("View", 10, 160, function(s)
 end, targetTab, false, 120)
 addActionButton("Teleport", 140, 160, function()
 	if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-		rootPart.CFrame = targetedPlayer.Character.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
+		if rootPart then rootPart.CFrame = targetedPlayer.Character.HumanoidRootPart.CFrame + Vector3.new(0, 3, 0) end
 	else
 		notify("Zangetsu", "No target selected.", 5)
 	end
 end, targetTab, 120)
-local flingActive = false
-local flingVelocityTask
-local flingOldPos
+
+-- Fling Button
 local flingBtn, flingToggle = addButton("Fling", 10, 210, function(s)
+	flingActive = s
 	if s then
-		if targetedPlayer then
-			flingOldPos = rootPart.Position
-			flingActive = true
-			flingVelocityTask = task.spawn(function()
-				while flingActive do
-					local originalVelocity = rootPart.Velocity
-					rootPart.Velocity = Vector3.new(math.random(-150, 150), -25000, math.random(-150, 150))
-					RunService.RenderStepped:Wait()
-					rootPart.Velocity = originalVelocity
-					RunService.Heartbeat:Wait()
-				end
-			end)
+		if targetedPlayer and rootPart then
+			lastPos = rootPart.Position
 			task.spawn(function()
-				while flingActive do
-					if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-						local targetPos = targetedPlayer.Character.HumanoidRootPart.CFrame
-						if predictionActive then
-							local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
-							local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-							targetPos = targetPos + vel * ping
-						end
-						rootPart.CFrame = targetPos
-						task.wait()
-					else
-						task.wait()
+				task.wait(0.5) -- Wait for 0.5 seconds before flinging
+				while flingActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and rootPart do
+					local targetPos = targetedPlayer.Character.HumanoidRootPart.CFrame
+					if predictionActive then
+						local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
+						local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+						targetPos = targetPos + vel * ping
 					end
+					rootPart.CFrame = targetPos
+					rootPart.Velocity = Vector3.new(math.random(-150, 150), -25000, math.random(-150, 150))
+					task.wait()
 				end
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				flingActive = false
+				for _, cb in pairs(buttonCallbacks["Fling"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
@@ -673,229 +782,280 @@ local flingBtn, flingToggle = addButton("Fling", 10, 210, function(s)
 		end
 	else
 		flingActive = false
-		if flingOldPos then
-			task.spawn(function()
-				local startTime = tick()
-				while tick() - startTime < 2 do
-					if rootPart then rootPart.CFrame = CFrame.new(flingOldPos) rootPart.Velocity = Vector3.new(0, 0, 0) end
-					RunService.Heartbeat:Wait()
-				end
-			end)
-		end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
-local bangActive = false
+
+-- Bang Button
 local bangBtn, bangToggle = addButton("Bang", 140, 210, function(s)
 	bangActive = s
 	if s then
-		if targetedPlayer then
-			lastPos = rootPart.Position  -- Save last position
+		if targetedPlayer and rootPart then
+			lastPos = rootPart.Position
 			PlayAnim(5918726674, 0, 1)
 			task.spawn(function()
-				while bangActive do
-					if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-						local targetPos = targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.1)
-						if predictionActive then
-							local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
-							local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-							targetPos = targetPos + vel * ping
-						end
-						rootPart.CFrame = targetPos
-						rootPart.Velocity = Vector3.new(0, 0, 0)
-						task.wait()
-					else
-						task.wait()
+				while bangActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and rootPart do
+					local targetPos = targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.1)
+					if predictionActive then
+						local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
+						local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+						targetPos = targetPos + vel * ping
 					end
+					rootPart.CFrame = targetPos
+					rootPart.Velocity = Vector3.new(0, 0, 0)
+					task.wait()
 				end
 				StopAnim()
-				if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				bangActive = false
+				for _, cb in pairs(buttonCallbacks["Bang"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
 			bangToggle(false)
 		end
 	else
+		bangActive = false
 		StopAnim()
-		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
-local headsitActive = false
+
+-- Headsit Button
 local headsitBtn, headsitToggle = addButton("Headsit", 10, 260, function(s)
 	headsitActive = s
 	if s then
-		if targetedPlayer then
-			lastPos = rootPart.Position  -- Save last position
+		if targetedPlayer and rootPart and humanoid then
+			lastPos = rootPart.Position
 			task.spawn(function()
-				while headsitActive do
-					if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("Head") then
-						humanoid.Sit = true
-						local targetPos = targetedPlayer.Character.Head.CFrame * CFrame.new(0, 2, 0)
-						if predictionActive then
-							local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
-							local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-							targetPos = targetPos + vel * ping
-						end
-						rootPart.CFrame = targetPos
-						rootPart.Velocity = Vector3.new(0, 0, 0)
-						task.wait()
-					else
-						task.wait()
+				while headsitActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("Head") and rootPart and humanoid do
+					humanoid.Sit = true
+					local targetPos = targetedPlayer.Character.Head.CFrame * CFrame.new(0, 2, 0)
+					if predictionActive then
+						local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
+						local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+						targetPos = targetPos + vel * ping
 					end
+					rootPart.CFrame = targetPos
+					rootPart.Velocity = Vector3.new(0, 0, 0)
+					task.wait()
 				end
-				if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+				humanoid.Sit = false
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				headsitActive = false
+				for _, cb in pairs(buttonCallbacks["Headsit"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
 			headsitToggle(false)
 		end
 	else
-		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+		headsitActive = false
+		if humanoid then humanoid.Sit = false end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
-local standActive = false
+
+-- Stand Button
 local standBtn, standToggle = addButton("Stand", 140, 260, function(s)
 	standActive = s
 	if s then
-		if targetedPlayer then
-			lastPos = rootPart.Position  -- Save last position
+		if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("LowerTorso") and rootPart and humanoid then
+			lastPos = rootPart.Position
 			originalAnimationSpeed = animationSpeedMultiplier
 			animationSpeedMultiplier = 0
-			PlayAnim(13823324057, 4, 0)
+			PlayAnim(13823324057,4,0) -- Assuming this is the Stand animation ID
 			task.spawn(function()
-				while standActive do
+				local breakVelocity = Instance.new("BodyAngularVelocity")
+				breakVelocity.AngularVelocity = Vector3.new(0,0,0)
+				breakVelocity.MaxTorque = Vector3.new(50000,50000,50000)
+				breakVelocity.P = 1250
+				breakVelocity.Name = "BreakVelocity"
+				breakVelocity.Parent = rootPart
+
+				while standActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("LowerTorso") and rootPart do
 					pcall(function()
-						local targetRoot = targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart")
+						local targetRoot = targetedPlayer.Character:FindFirstChild("LowerTorso")
 						if targetRoot then
-							rootPart.CFrame = targetRoot.CFrame * CFrame.new(-3, 1, 0)
-							rootPart.Velocity = Vector3.new(0, 0, 0)
-							rootPart.Anchored = true  -- Anchor to prevent movement
+							local targetCFrame = targetRoot.CFrame * CFrame.new(-3,1,0)
+							if predictionActive then
+								local vel = targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and targetedPlayer.Character.HumanoidRootPart.Velocity or Vector3.zero
+								local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+								targetCFrame = targetCFrame + vel * ping
+							end
+							rootPart.CFrame = targetCFrame
+							rootPart.Velocity = Vector3.new(0,0,0)
 						end
 					end)
 					task.wait()
 				end
+
 				StopAnim()
 				animationSpeedMultiplier = originalAnimationSpeed
-				if rootPart then rootPart.Anchored = false end  -- Unanchor when toggle is off
-				if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+				if rootPart and breakVelocity then breakVelocity:Destroy() end
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				standActive = false
+				for _, cb in pairs(buttonCallbacks["Stand"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
 			standToggle(false)
 		end
 	else
+		standActive = false
 		StopAnim()
 		animationSpeedMultiplier = originalAnimationSpeed
-		if rootPart then rootPart.Anchored = false end
-		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+		if rootPart and rootPart:FindFirstChild("BreakVelocity") then rootPart.BreakVelocity:Destroy() end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
-local backpackActive = false
+
+-- Backpack Button
 local backpackBtn, backpackToggle = addButton("Backpack", 10, 310, function(s)
 	backpackActive = s
 	if s then
-		if targetedPlayer then
-			lastPos = rootPart.Position  -- Save last position
+		if targetedPlayer and rootPart and humanoid then
+			lastPos = rootPart.Position
 			task.spawn(function()
-				while backpackActive do
-					if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
-						humanoid.Sit = true
-						local targetPos = targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.2) * CFrame.Angles(0, -3, 0)
-						if predictionActive then
-							local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
-							local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-							targetPos = targetPos + vel * ping
-						end
-						rootPart.CFrame = targetPos
-						rootPart.Velocity = Vector3.new(0, 0, 0)
-						task.wait()
-					else
-						task.wait()
+				while backpackActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and rootPart and humanoid do
+					humanoid.Sit = true
+					local targetPos = targetedPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 1.2) * CFrame.Angles(0, -3, 0)
+					if predictionActive then
+						local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
+						local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+						targetPos = targetPos + vel * ping
 					end
+					rootPart.CFrame = targetPos
+					rootPart.Velocity = Vector3.new(0, 0, 0)
+					task.wait()
 				end
-				if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+				humanoid.Sit = false
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				backpackActive = false
+				for _, cb in pairs(buttonCallbacks["Backpack"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
 			backpackToggle(false)
 		end
 	else
-		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+		backpackActive = false
+		if humanoid then humanoid.Sit = false end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
-local doggyActive = false
+
+-- Doggy Button
 local doggyBtn, doggyToggle = addButton("Doggy", 140, 310, function(s)
 	doggyActive = s
 	if s then
-		if targetedPlayer then
-			lastPos = rootPart.Position  -- Save last position
+		if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("LowerTorso") and rootPart and humanoid then
+			lastPos = rootPart.Position
 			originalAnimationSpeed = animationSpeedMultiplier
 			animationSpeedMultiplier = 0
-			PlayAnim(13694096724, 3.4, 0)
+			PlayAnim(13694096724,3.4,0) -- Assuming this is the Doggy animation ID
 			task.spawn(function()
-				while doggyActive do
+				local breakVelocity = Instance.new("BodyAngularVelocity")
+				breakVelocity.AngularVelocity = Vector3.new(0,0,0)
+				breakVelocity.MaxTorque = Vector3.new(50000,50000,50000)
+				breakVelocity.P = 1250
+				breakVelocity.Name = "BreakVelocity"
+				breakVelocity.Parent = rootPart
+
+				while doggyActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("LowerTorso") and rootPart and humanoid do
 					pcall(function()
-						local targetRoot = targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("LowerTorso")
+						local targetRoot = targetedPlayer.Character:FindFirstChild("LowerTorso")
 						if targetRoot then
-							rootPart.CFrame = targetRoot.CFrame * CFrame.new(0, 0.23, 0)
-							rootPart.Velocity = Vector3.new(0, 0, 0)
-							rootPart.Anchored = true  -- Anchor to prevent movement
+							humanoid.Sit = true -- Set Sit = true for Doggy pose
+							local targetCFrame = targetRoot.CFrame * CFrame.new(0,0.23,0)
+							if predictionActive then
+								local vel = targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and targetedPlayer.Character.HumanoidRootPart.Velocity or Vector3.zero
+								local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+								targetCFrame = targetCFrame + vel * ping
+							end
+							rootPart.CFrame = targetCFrame
+							rootPart.Velocity = Vector3.new(0,0,0)
 						end
 					end)
 					task.wait()
 				end
+
 				StopAnim()
 				animationSpeedMultiplier = originalAnimationSpeed
-				if rootPart then rootPart.Anchored = false end  -- Unanchor when toggle is off
-				if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+				if rootPart and breakVelocity then breakVelocity:Destroy() end
+				if humanoid then humanoid.Sit = false end -- Reset Sit state
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				doggyActive = false
+				for _, cb in pairs(buttonCallbacks["Doggy"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
 			doggyToggle(false)
 		end
 	else
+		doggyActive = false
 		StopAnim()
 		animationSpeedMultiplier = originalAnimationSpeed
-		if rootPart then rootPart.Anchored = false end
-		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+		if rootPart and rootPart:FindFirstChild("BreakVelocity") then rootPart.BreakVelocity:Destroy() end
+		if humanoid then humanoid.Sit = false end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
-local dragActive = false
+
+-- Drag Button
 local dragBtn, dragToggle = addButton("Drag", 10, 360, function(s)
 	dragActive = s
 	if s then
-		if targetedPlayer then
-			lastPos = rootPart.Position  -- Save last position
+		if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("RightHand") and rootPart and humanoid then
+			lastPos = rootPart.Position
 			originalAnimationSpeed = animationSpeedMultiplier
 			animationSpeedMultiplier = 0
-			PlayAnim(10714360343, 0.5, 0)
+			PlayAnim(10714360343,0.5,0) -- Assuming this is the Drag animation ID
 			task.spawn(function()
-				while dragActive do
+				local breakVelocity = Instance.new("BodyAngularVelocity")
+				breakVelocity.AngularVelocity = Vector3.new(0,0,0)
+				breakVelocity.MaxTorque = Vector3.new(50000,50000,50000)
+				breakVelocity.P = 1250
+				breakVelocity.Name = "BreakVelocity"
+				breakVelocity.Parent = rootPart
+
+				while dragActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("RightHand") and rootPart do
 					pcall(function()
-						local targetHand = targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("RightHand")
+						local targetHand = targetedPlayer.Character:FindFirstChild("RightHand")
 						if targetHand then
-							rootPart.CFrame = targetHand.CFrame * CFrame.new(0, -2.5, 1) * CFrame.Angles(-2, -3, 0)
-							rootPart.Velocity = Vector3.new(0, 0, 0)
-							rootPart.Anchored = true  -- Anchor to prevent movement
+							local targetCFrame = targetHand.CFrame * CFrame.new(0,-2.5,1) * CFrame.Angles(-2, -3, 0)
+							if predictionActive then
+								local vel = targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and targetedPlayer.Character.HumanoidRootPart.Velocity or Vector3.zero
+								local ping = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+								targetCFrame = targetCFrame + vel * ping
+							end
+							rootPart.CFrame = targetCFrame
+							rootPart.Velocity = Vector3.new(0,0,0)
 						end
 					end)
 					task.wait()
 				end
+
 				StopAnim()
 				animationSpeedMultiplier = originalAnimationSpeed
-				if rootPart then rootPart.Anchored = false end  -- Unanchor when toggle is off
-				if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+				if rootPart and breakVelocity then breakVelocity:Destroy() end
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				dragActive = false
+				for _, cb in pairs(buttonCallbacks["Drag"] or {}) do cb(false) end
 			end)
 		else
 			notify("Zangetsu", "No target selected.", 5)
 			dragToggle(false)
 		end
 	else
+		dragActive = false
 		StopAnim()
 		animationSpeedMultiplier = originalAnimationSpeed
-		if rootPart then rootPart.Anchored = false end
-		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end  -- Restore last position
+		if rootPart and rootPart:FindFirstChild("BreakVelocity") then rootPart.BreakVelocity:Destroy() end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
 	end
 end, targetTab, false, 120)
+
 addActionButton("Find Nearest", 140, 360, function()
 	local nearestPlayer = nil
 	local minDistance = math.huge
@@ -951,7 +1111,8 @@ clickTargetBtn.MouseButton1Click:Connect(function()
 	GetTargetTool.TextureId = "rbxassetid://2716591855"
 	GetTargetTool.ToolTip = "Select Target"
 	GetTargetTool.Activated:Connect(function()
-		local hit = player:GetMouse().Target
+		local mouse = player:GetMouse()
+		local hit = mouse.Target
 		if hit and hit.Parent then
 			local person = Players:GetPlayerFromCharacter(hit.Parent)
 			if not person and hit.Parent:IsA("Accessory") then person = Players:GetPlayerFromCharacter(hit.Parent.Parent) end
@@ -971,11 +1132,12 @@ targetTab.CanvasSize = UDim2.new(0, 0, 0, 450)
 local loadingType = nil
 local customAnimTextBoxes = {}
 local individualLoadButtons = {}
+local loadAllToggle = false
 
 local function applyAnimation(idle, swim, walk, run, jump, climb, fall)
 	pcall(function()
-		local Animate = character and character:FindFirstChild("Animate")
-		if not Animate then return end
+		if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("Animate") then return end
+		local Animate = character.Animate
 		Animate.Disabled = true
 		StopAnim()
 		local function setAnimId(animObj, id)
@@ -998,46 +1160,7 @@ local function applyAnimation(idle, swim, walk, run, jump, climb, fall)
 	end)
 end
 
-local function createAnimationsGrid(animations, parent)
-	local perRow = 5
-	local spacing = 10
-	local btnWidth = (parent.AbsoluteSize.X - (perRow + 1) * spacing) / perRow
-	for i, anim in ipairs(animations) do
-		local row = math.floor((i - 1) / perRow)
-		local col = (i - 1) % perRow
-		local name, idle, swim, walk, run, jump, climb, fall = unpack(anim)
-		local btn = create("TextButton", {
-			Size = UDim2.new(0, btnWidth, 0, 23),
-			Position = UDim2.new(0, spacing + col * (btnWidth + spacing), 0, spacing + row * (30 + spacing)),
-			BackgroundColor3 = colors.Button,
-			Text = name,
-			TextColor3 = colors.Text,
-			TextSize = 14.5,
-			Font = Enum.Font.FredokaOne,
-			Parent = parent
-		})
-		create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
-		btn.MouseButton1Click:Connect(function()
-			if loadAllToggle then
-				customAnimTextBoxes["Idle"].Text = idle
-				customAnimTextBoxes["Walk"].Text = walk
-				customAnimTextBoxes["Run"].Text = run
-				customAnimTextBoxes["Jump"].Text = jump
-				customAnimTextBoxes["Fall"].Text = fall
-				customAnimTextBoxes["Climb"].Text = climb
-				customAnimTextBoxes["Swim"].Text = swim
-			elseif loadingType then
-				customAnimTextBoxes[loadingType].Text = anim[loadingType == "Idle" and 2 or loadingType == "Swim" and 3 or loadingType == "Walk" and 4 or loadingType == "Run" and 5 or loadingType == "Jump" and 6 or loadingType == "Climb" and 7 or loadingType == "Fall" and 8]
-				loadingType = nil
-				for _, btn in pairs(individualLoadButtons) do btn.Text = "Select" end
-			else
-				applyAnimation(idle, swim, walk, run, jump, climb, fall)
-			end
-		end)
-	end
-end
-
-animButtons = {
+local animButtons = {
 	{"Vampire", "1083445855", "1083450166", "1083473930", "1083462077", "1083455352", "1083439238", "1083443587"},
 	{"Hero", "616111295", "616113536", "616122287", "616117076", "616115533", "616104706", "616108001"},
 	{"Zombie Classic", "616158929", "616160636", "616168032", "616163682", "616161997", "616156119", "616157476"},
@@ -1079,9 +1202,48 @@ animButtons = {
 	{"Goofy", "18537387180", "18537387180", "18537367238", "18537367238", "18537367238", "18537367238", "18537367238"}
 }
 
+local function createAnimationsGrid(animations, parent)
+	local perRow = 5
+	local spacing = 10
+	local btnWidth = (parent.AbsoluteSize.X - (perRow + 1) * spacing) / perRow
+	for i, anim in ipairs(animations) do
+		local row = math.floor((i - 1) / perRow)
+		local col = (i - 1) % perRow
+		local name, idle, swim, walk, run, jump, climb, fall = unpack(anim)
+		local btn = create("TextButton", {
+			Size = UDim2.new(0, btnWidth, 0, 23),
+			Position = UDim2.new(0, spacing + col * (btnWidth + spacing), 0, spacing + row * (30 + spacing)),
+			BackgroundColor3 = colors.Button,
+			Text = name,
+			TextColor3 = colors.Text,
+			TextSize = 14.5,
+			Font = Enum.Font.FredokaOne,
+			Parent = parent
+		})
+		create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
+		btn.MouseButton1Click:Connect(function()
+			if loadAllToggle then
+				customAnimTextBoxes["Idle"].Text = idle or ""
+				customAnimTextBoxes["Walk"].Text = walk or ""
+				customAnimTextBoxes["Run"].Text = run or ""
+				customAnimTextBoxes["Jump"].Text = jump or ""
+				customAnimTextBoxes["Fall"].Text = fall or ""
+				customAnimTextBoxes["Climb"].Text = climb or ""
+				customAnimTextBoxes["Swim"].Text = swim or ""
+			elseif loadingType then
+				local animId = anim[loadingType == "Idle" and 2 or loadingType == "Swim" and 3 or loadingType == "Walk" and 4 or loadingType == "Run" and 5 or loadingType == "Jump" and 6 or loadingType == "Climb" and 7 or loadingType == "Fall" and 8]
+				customAnimTextBoxes[loadingType].Text = animId or ""
+				loadingType = nil
+				for _, btn in pairs(individualLoadButtons) do btn.Text = "Select" end
+			else
+				applyAnimation(idle, swim, walk, run, jump, climb, fall)
+			end
+		end)
+	end
+end
+
 createAnimationsGrid(animButtons, animationsTab)
 
--- Custom Animation Controls
 local customAnimHeader = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 750), BackgroundTransparency = 1, Text = "Custom Animation Controls", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = animationsTab})
 local animTypes = {"Idle", "Run", "Walk", "Jump", "Fall", "Swim", "Climb"}
 for i, animType in ipairs(animTypes) do
@@ -1105,26 +1267,28 @@ for i, animType in ipairs(animTypes) do
 	individualLoadButtons[animType] = loadBtn
 end
 
-local applyBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 10, 0, 1100), BackgroundColor3 = colors.Interface, Text = "Apply Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+ applyBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 10, 0, 1100), BackgroundColor3 = colors.Interface, Text = "Apply Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = applyBtn})
-local resetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, 1100), BackgroundColor3 = colors.Button, Text = "Reset Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+ resetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, 1100), BackgroundColor3 = colors.Button, Text = "Reset Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = resetBtn})
-local loadAnimationBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 270, 0, 1100), BackgroundColor3 = colors.Button, Text = "Load Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+ loadAnimationBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 270, 0, 1100), BackgroundColor3 = colors.Button, Text = "Load Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = loadAnimationBtn})
 loadAnimationBtn.MouseButton1Click:Connect(function()
 	loadAllToggle = not loadAllToggle
 	loadAnimationBtn.Text = loadAllToggle and "Select Animation" or "Load Animation"
 end)
 
-animSpeedSlider = addSlider("Animation Speed", 0, 25, 1, 1140, function(v) animationSpeedMultiplier = v end, animationsTab, false, false)
-emoteBtnY = 1180
-function emoteScript() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Gi7331/scripts/main/Emote.lua"))() end
+local animSpeedToggleFrame, animSpeedToggle = addToggle("Custom Speed", false, 1140, function(on) customAnimSpeedEnabled = on end, animationsTab)
+local animSpeedSlider = addSlider("Animation Speed", 0, 25, 1, 1180, function(v) animationSpeedMultiplier = v end, animationsTab, false, false)
+
+local emoteBtnY = 1220
+local function emoteScript() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Gi7331/scripts/main/Emote.lua"))() end
 addActionButton("Emote", 10, emoteBtnY, function()
 	notify("Zangetsu", "Open with ,", 5)
 	emoteScript()
 end, animationsTab, 120)
 
-function applyCustomAnimations()
+local function applyCustomAnimations()
 	if not character or not character:FindFirstChild("Animate") then return end
 	local Animate = character.Animate
 	Animate.Disabled = true
@@ -1147,7 +1311,7 @@ function applyCustomAnimations()
 	Animate.Disabled = false
 end
 
-function resetAnimations()
+local function resetAnimations()
 	if not character or not character:FindFirstChild("Animate") then return end
 	local Animate = character.Animate
 	Animate.Disabled = true
@@ -1169,7 +1333,7 @@ end
 
 applyBtn.MouseButton1Click:Connect(applyCustomAnimations)
 resetBtn.MouseButton1Click:Connect(resetAnimations)
-animationsTab.CanvasSize = UDim2.new(0, 0, 0, 1230)
+animationsTab.CanvasSize = UDim2.new(0, 0, 0, 1270)
 
 -- Keybinds
 addKeybind("Menu", keybinds.Menu, 0)
@@ -1181,14 +1345,16 @@ addKeybind("Speed", keybinds.Speed, 150)
 addKeybind("Headbang", nil, 180)
 
 -- Configuration Functions
-function serializeConfig()
+ function serializeConfig()
 	local kb = {}
 	for name, bind in pairs(keybinds) do
 		kb[name] = bind and {Type = bind.Type, Value = bind.Value.Name}
 	end
-	return game:GetService("HttpService"):JSONEncode({
+	local anims = {}
+	for animType, tb in pairs(customAnimTextBoxes) do anims[animType] = tb.Text end
+	return HttpService:JSONEncode({
 		keybinds = kb,
-		animations = {Idle = customAnimTextBoxes["Idle"].Text, Walk = customAnimTextBoxes["Walk"].Text, Run = customAnimTextBoxes["Run"].Text, Jump = customAnimTextBoxes["Jump"].Text, Fall = customAnimTextBoxes["Fall"].Text, Climb = customAnimTextBoxes["Climb"].Text, Swim = customAnimTextBoxes["Swim"].Text},
+		animations = anims,
 		visuals = {ESPColor = {R = colors.ESP.R * 255, G = colors.ESP.G * 255, B = colors.ESP.B * 255}, Saturation = sliderValues["Saturation"], FOV = sliderValues["FOV"], InfiniteZoom = toggleStates["Infinite Zoom"]},
 		player = {
 			ClickTeleport = toggleStates["Click Teleport"],
@@ -1199,12 +1365,13 @@ function serializeConfig()
 			HeadbangSpeed = speed,
 			HeadbangHeightOffset = headbangHeightOffset
 		},
-		ui = {Transparency = sliderValues["Transparency"]}
+		ui = {Transparency = sliderValues["Transparency"]},
+		animation = {CustomSpeedEnabled = customAnimSpeedEnabled, SpeedMultiplier = animationSpeedMultiplier}
 	})
 end
 
-function applyConfig(jsonStr)
-	local config = game:GetService("HttpService"):JSONDecode(jsonStr)
+ function applyConfig(jsonStr)
+	local config = HttpService:JSONDecode(jsonStr)
 	if config.keybinds then
 		for name in pairs(keybinds) do keybinds[name] = nil if keybindButtons[name] then keybindButtons[name].Text = "None" end end
 		for name, kb in pairs(config.keybinds) do
@@ -1240,14 +1407,18 @@ function applyConfig(jsonStr)
 		sliderValues["Transparency"] = config.ui.Transparency
 		for _, cb in pairs(sliderCallbacks["Transparency"]) do cb(config.ui.Transparency) end
 	end
+	if config.animation then
+		if config.animation.CustomSpeedEnabled ~= nil and toggleCallbacks["Custom Speed"] then toggleCallbacks["Custom Speed"][1](config.animation.CustomSpeedEnabled) end
+		if config.animation.SpeedMultiplier ~= nil and sliderCallbacks["Animation Speed"] then sliderCallbacks["Animation Speed"][1](config.animation.SpeedMultiplier) end
+	end
 end
 
 -- Settings Tab
 addSlider("Transparency", 0, 1, menuTransparency, 20, function(v) mainFrame.BackgroundTransparency = v keybindsFrame.BackgroundTransparency = v end, settingsTab, false, false)
 create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 60), BackgroundTransparency = 1, Text = "Configuration", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
-configNameBox = create("TextBox", {Size = UDim2.new(0.7, 0, 0, 30), Position = UDim2.new(0, 10, 0, 100), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "Config name", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ configNameBox = create("TextBox", {Size = UDim2.new(0.7, 0, 0, 30), Position = UDim2.new(0, 10, 0, 100), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "Config name", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = configNameBox})
-configListFrame = create("ScrollingFrame", {Size = UDim2.new(0.7, 0, 0, 150), Position = UDim2.new(0, 10, 0, 140), BackgroundColor3 = colors.Background, CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 4, Parent = settingsTab})
+ configListFrame = create("ScrollingFrame", {Size = UDim2.new(0.7, 0, 0, 150), Position = UDim2.new(0, 10, 0, 140), BackgroundColor3 = colors.Background, CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 4, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = configListFrame})
 create("UIListLayout", {Padding = UDim.new(0, 5), Parent = configListFrame})
 local selectedConfig, autoloadConfig
@@ -1263,7 +1434,7 @@ local function refreshConfigList()
 		if file:match("%.json$") then
 			local name = file:match("ZangetsuConfig/(.-)%.json$") or file:match("^(.-)%.json$")
 			if name then
-				local btn = create("TextButton", {Size = UDim2.new(1, -40, 0, 30), Position = UDim2.new(0, 5, 0, y), BackgroundColor3 = selectedConfig == name and colors.TabSelected or colors.Button, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = configListFrame})
+				local btn = create("TextButton", {Size = UDim2.new(1, -40, 0, 30), Position = UDim2.new(0, 5, 0, y), BackgroundColor3 = selectedConfig == name and colors.TabSelected or colors.Button, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = configListFrame})
 				create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
 				btn.MouseButton1Click:Connect(function()
 					selectedConfig = name
@@ -1282,7 +1453,7 @@ local function refreshConfigList()
 end
 task.spawn(function() while true do if tabContents["Settings"].Visible then refreshConfigList() end task.wait(1) end end)
 
-createBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 300), BackgroundColor3 = colors.Button, Text = "Create config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ createBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 300), BackgroundColor3 = colors.Button, Text = "Create config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = createBtn})
 createBtn.MouseButton1Click:Connect(function()
 	local name = configNameBox.Text:gsub("[^%w_]", "_")
@@ -1292,7 +1463,7 @@ createBtn.MouseButton1Click:Connect(function()
 	pcall(function() writefile(filePath, serializeConfig()) notify("Config Created", "Config '" .. name .. "' created.", 5) refreshConfigList() end)
 end)
 
-loadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 300), BackgroundColor3 = colors.Button, Text = "Load config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ loadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 300), BackgroundColor3 = colors.Button, Text = "Load config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = loadBtn})
 loadBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1301,14 +1472,14 @@ loadBtn.MouseButton1Click:Connect(function()
 	pcall(function() applyConfig(readfile(filePath)) notify("Config Loaded", "Config '" .. selectedConfig .. "' loaded.", 5) end)
 end)
 
-unsetAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 340), BackgroundColor3 = colors.Button, Text = "Unset Autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ unsetAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 340), BackgroundColor3 = colors.Button, Text = "Unset Autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = unsetAutoloadBtn})
 unsetAutoloadBtn.MouseButton1Click:Connect(function()
 	if not isfile("ZangetsuConfig/autoload.txt") then return end
 	pcall(function() delfile("ZangetsuConfig/autoload.txt") notify("Autoload Unset", "Autoload unset.", 5) autoloadLabel.Text = "Current autoload config: none" refreshConfigList() end)
 end)
 
-overwriteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 300), BackgroundColor3 = colors.Button, Text = "Overwrite config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ overwriteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 300), BackgroundColor3 = colors.Button, Text = "Overwrite config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = overwriteBtn})
 overwriteBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1317,22 +1488,22 @@ overwriteBtn.MouseButton1Click:Connect(function()
 	pcall(function() writefile(filePath, serializeConfig()) notify("Config Overwritten", "Config '" .. selectedConfig .. "' overwritten.", 5) end)
 end)
 
-deleteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 340), BackgroundColor3 = colors.Button, Text = "Delete config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ deleteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 340), BackgroundColor3 = colors.Button, Text = "Delete config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = deleteBtn})
 deleteBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
 	local filePath = "ZangetsuConfig/" .. selectedConfig .. ".json"
 	if not isfile(filePath) then notify("Error", "Config not found.", 5) return end
-	pcall(function() 
-		delfile(filePath) 
+	pcall(function()
+		delfile(filePath)
 		if autoloadConfig == selectedConfig and isfile("ZangetsuConfig/autoload.txt") then delfile("ZangetsuConfig/autoload.txt") autoloadLabel.Text = "Current autoload config: none" end
-		notify("Config Deleted", "Config '" .. selectedConfig .. "' deleted.", 5) 
-		selectedConfig = nil 
-		refreshConfigList() 
+		notify("Config Deleted", "Config '" .. selectedConfig .. "' deleted.", 5)
+		selectedConfig = nil
+		refreshConfigList()
 	end)
 end)
 
-setAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 340), BackgroundColor3 = colors.Button, Text = "Set as autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ setAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 340), BackgroundColor3 = colors.Button, Text = "Set as autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = setAutoloadBtn})
 setAutoloadBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1341,8 +1512,8 @@ setAutoloadBtn.MouseButton1Click:Connect(function()
 	pcall(function() writefile("ZangetsuConfig/autoload.txt", selectedConfig) notify("Autoload Set", "Config '" .. selectedConfig .. "' set as autoload.", 5) autoloadLabel.Text = "Current autoload config: " .. selectedConfig refreshConfigList() end)
 end)
 
-autoloadLabel = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 10, 0, 380), BackgroundTransparency = 1, Text = "Current autoload config: none", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
-resetBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 420), BackgroundColor3 = colors.Button, Text = "Reset to defaults", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+ autoloadLabel = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 10, 0, 380), BackgroundTransparency = 1, Text = "Current autoload config: none", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
+local resetBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 420), BackgroundColor3 = colors.Button, Text = "Reset to defaults", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = resetBtn})
 resetBtn.MouseButton1Click:Connect(function()
 	keybinds = {Menu = {Type = "Keyboard", Value = Enum.KeyCode.G}}
@@ -1350,22 +1521,39 @@ resetBtn.MouseButton1Click:Connect(function()
 	for animType, tb in pairs(customAnimTextBoxes) do tb.Text = "" end
 	colors.ESP = Color3.fromRGB(75, 0, 130)
 	updateESPColor(colors.ESP)
-	sliderCallbacks["Saturation"][1](0)
-	sliderCallbacks["FOV"][1](70)
-	toggleCallbacks["Infinite Zoom"][1](false)
-	toggleCallbacks["Click Teleport"][1](false)
+	if sliderCallbacks["Saturation"] then sliderCallbacks["Saturation"][1](0) end
+	if sliderCallbacks["FOV"] then sliderCallbacks["FOV"][1](70) end
+	if toggleCallbacks["Infinite Zoom"] then toggleCallbacks["Infinite Zoom"][1](false) end
+	if toggleCallbacks["Click Teleport"] then toggleCallbacks["Click Teleport"][1](false) end
 	for name, callbacks in pairs(toggleCallbacks) do
-		if name ~= "Infinite Zoom" and name ~= "Click Teleport" then
+		if name ~= "Infinite Zoom" and name ~= "Click Teleport" and name ~= "Custom Speed" then
 			for _, cb in pairs(callbacks) do cb(false) end
 		end
 	end
+	for name, callbacks in pairs(buttonCallbacks) do
+		for _, cb in pairs(callbacks) do cb(false) end
+	end
+	speedValue = 300
+	flySpeedValue = 300
+	minDist = 1.5
+	maxDist = 4
+	speed = 20
+	headbangHeightOffset = 1.38
+	csi.Text = tostring(speedValue)
+	fsi.Text = tostring(flySpeedValue)
+	minDistBox.Text = tostring(minDist)
+	maxDistBox.Text = tostring(maxDist)
+	speedBox.Text = tostring(speed)
+	heightOffsetBox.Text = tostring(headbangHeightOffset)
+	if toggleCallbacks["Custom Speed"] then toggleCallbacks["Custom Speed"][1](false) end
+	if sliderCallbacks["Animation Speed"] then sliderCallbacks["Animation Speed"][1](1) end
 end)
 settingsTab.CanvasSize = UDim2.new(0, 0, 0, 460)
 
 -- Autoload Check
 if isfile("ZangetsuConfig/autoload.txt") then
-	autoloadName = readfile("ZangetsuConfig/autoload.txt")
-	filePath = "ZangetsuConfig/" .. autoloadName .. ".json"
+	local autoloadName = readfile("ZangetsuConfig/autoload.txt")
+	local filePath = "ZangetsuConfig/" .. autoloadName .. ".json"
 	if isfile(filePath) then
 		applyConfig(readfile(filePath))
 		autoloadLabel.Text = "Current autoload config: " .. autoloadName
@@ -1375,19 +1563,19 @@ if isfile("ZangetsuConfig/autoload.txt") then
 end
 
 -- Color Picker
-cpf = create("Frame", {Size = UDim2.new(0, 180, 0, 140), Position = UDim2.new(0.5, -90, 0.5, -70), BackgroundColor3 = colors.Background, Visible = false, Parent = gui})
+ cpf = create("Frame", {Size = UDim2.new(0, 180, 0, 140), Position = UDim2.new(0.5, -90, 0.5, -70), BackgroundColor3 = colors.Background, Visible = false, Parent = gui})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = cpf})
-db = create("Frame", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = colors.Header, Parent = cpf})
+ db = create("Frame", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = colors.Header, Parent = cpf})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = db})
 create("TextLabel", {Size = UDim2.new(0.8, 0, 1, 0), Position = UDim2.new(0.1, 0, 0, 0), BackgroundTransparency = 1, Text = "Color Picker", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = db})
-cbx = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -24, 0, 2), BackgroundColor3 = colors.Button, Text = "X", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = db})
+ cbx = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -24, 0, 2), BackgroundColor3 = colors.Button, Text = "X", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = db})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = cbx})
 cbx.MouseButton1Click:Connect(function() cpf.Visible = false end)
-cp = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, 114), BackgroundColor3 = colors.ESP, Parent = cpf})
+ cp = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, 114), BackgroundColor3 = colors.ESP, Parent = cpf})
 create("UICorner", {CornerRadius = UDim.new(0, 4), Parent = cp})
 
-function createSlider(label, y, callback)
-	sf = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, y), BackgroundColor3 = colors.Button, Parent = cpf})
+ function createSlider(label, y, callback)
+	 sf = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, y), BackgroundColor3 = colors.Button, Parent = cpf})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = sf})
 	local fill = create("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = colors.Interface, Parent = sf})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = fill})
@@ -1405,11 +1593,11 @@ function createSlider(label, y, callback)
 	return fill
 end
 
-hf = createSlider("H", 30, function(v) local h, s, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(v, s, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
-sf = createSlider("S", 54, function(v) local h, _, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, v, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
-vf = createSlider("V", 78, function(v) local h, s = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, s, v) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
+ hf = createSlider("H", 30, function(v) local h, s, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(v, s, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
+ sf = createSlider("S", 54, function(v) local h, _, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, v, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
+ vf = createSlider("V", 78, function(v) local h, s = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, s, v) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
 
-function openColorPicker()
+ function openColorPicker()
 	cpf.Visible = not cpf.Visible
 	if cpf.Visible then
 		local h, s, v = colors.ESP:ToHSV()
@@ -1419,9 +1607,11 @@ function openColorPicker()
 		cp.BackgroundColor3 = colors.ESP
 	end
 end
-dragging = false
-startPos = nil
-startFramePos = nil
+espColorBtn.MouseButton1Click:Connect(openColorPicker)
+
+ dragging = false
+ startPos = nil
+ startFramePos = nil
 
 db.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1446,14 +1636,14 @@ tabs["Visuals"].BackgroundColor3 = colors.TabSelected
 tabContents["Visuals"].Visible = true
 
 -- Helper Functions for Keybinds
-function isKeybindPressed(keybind, input)
+ function isKeybindPressed(keybind, input)
 	if not keybind then return false end
 	if keybind.Type == "Keyboard" and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind.Value then return true
 	elseif keybind.Type == "MouseButton" and input.UserInputType == keybind.Value then return true end
 	return false
 end
 
-function isKeybindDown(keybind)
+ function isKeybindDown(keybind)
 	if not keybind then return false end
 	if keybind.Type == "Keyboard" then return UserInputService:IsKeyDown(keybind.Value)
 	elseif keybind.Type == "MouseButton" then return UserInputService:IsMouseButtonPressed(keybind.Value) end
@@ -1494,19 +1684,19 @@ RunService.RenderStepped:Connect(function(dt)
 	end
 	if noclipActive then for _, p in pairs(character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end
 	if timeLocked then Lighting.ClockTime = sliderValues["Time"] or originalSettings.ClockTime end
-	if character and character.Humanoid then for _, track in pairs(character.Humanoid:GetPlayingAnimationTracks()) do track:AdjustSpeed(animationSpeedMultiplier) end end
+	if character and character.Humanoid then for _, track in pairs(character.Humanoid:GetPlayingAnimationTracks()) do track:AdjustSpeed(customAnimSpeedEnabled and animationSpeedMultiplier or 1) end end
 end)
 
 -- Infinite Jump
 UserInputService.JumpRequest:Connect(function() if infiniteJumpEnabled and character and humanoid then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end end)
 
 -- Character Update
-function updateCharacter(c)
+ function updateCharacter(c)
 	if not c then return end
 	character = c
 	rootPart = c:WaitForChild("HumanoidRootPart", 3)
 	humanoid = c:WaitForChild("Humanoid", 3)
-	if not rootPart then return end
+	if not rootPart or not humanoid then return end
 	task.wait(0.5)
 	local Animate = character:FindFirstChild("Animate")
 	if Animate then
@@ -1532,44 +1722,57 @@ function updateCharacter(c)
 	end
 	if flyActive then
 		humanoid.PlatformStand = true
-		bodyVelocity = bodyVelocity or Instance.new("BodyVelocity")
-		bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-		bodyVelocity.Velocity = Vector3.new()
-		bodyVelocity.Parent = rootPart
-		bodyGyro = bodyGyro or Instance.new("BodyGyro")
-		bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-		bodyGyro.P = 20000
-		bodyGyro.D = 100
-		bodyGyro.Parent = rootPart
+		local bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bv.Velocity = Vector3.new()
+		bv.Parent = rootPart
+		local bg = Instance.new("BodyGyro")
+		bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		bg.P = 20000
+		bg.D = 100
+		bg.Parent = rootPart
+		bodyVelocity = bv
+		bodyGyro = bg
 	end
 	if espActive then updateESP() end
-	if headbangActive then stopHeadbang() end
+	stopHeadbang()
+	if flingActive then for _, cb in pairs(buttonCallbacks["Fling"] or {}) do cb(false) end end
+	if bangActive then for _, cb in pairs(buttonCallbacks["Bang"] or {}) do cb(false) end end
+	if headsitActive then for _, cb in pairs(buttonCallbacks["Headsit"] or {}) do cb(false) end end
+	if standActive then for _, cb in pairs(buttonCallbacks["Stand"] or {}) do cb(false) end end
+	if backpackActive then for _, cb in pairs(buttonCallbacks["Backpack"] or {}) do cb(false) end end
+	if doggyActive then for _, cb in pairs(buttonCallbacks["Doggy"] or {}) do cb(false) end end
+	if dragActive then for _, cb in pairs(buttonCallbacks["Drag"] or {}) do cb(false) end end
 end
 player.CharacterAdded:Connect(updateCharacter)
 if player.Character then updateCharacter(player.Character) end
 
 -- GUI Dragging
+ dragStart = nil
+ startFramePos = nil
+ draggingGUI = false
+
 header.InputBegan:Connect(function(i)
 	if i.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragging = true
+		draggingGUI = true
 		dragStart = i.Position
-		startPos = mainFrame.Position
+		startFramePos = mainFrame.Position
 	end
 end)
 
 UserInputService.InputChanged:Connect(function(i)
-	if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+	if draggingGUI and i.UserInputType == Enum.UserInputType.MouseMovement then
 		local delta = i.Position - dragStart
-		mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		mainFrame.Position = UDim2.new(startFramePos.X.Scale, startFramePos.X.Offset + delta.X, startFramePos.Y.Scale, startFramePos.Y.Offset + delta.Y)
 	end
 end)
 
 UserInputService.InputEnded:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then draggingGUI = false end
 end)
 
--- Menu Toggle
-local clickTeleportKeyHeld = false
+-- Menu Toggle and Keybinds
+ clickTeleportKeyHeld = false
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 	if isKeybindPressed(keybinds.Menu, input) then
@@ -1584,7 +1787,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	elseif isKeybindPressed(keybinds.Speed, input) then
 		for _, cb in pairs(toggleCallbacks["Speed"] or {}) do cb(not speedActive) end
 	elseif headbangEnabled and isKeybindPressed(keybinds.Headbang, input) then
-		if headbangActive then
+		if isHeadbangActive then
 			stopHeadbang()
 		else
 			startHeadbang()
@@ -1616,7 +1819,3 @@ end)
 game:BindToClose(function()
 	pcall(cleanupMenu)
 end)
-
--- Initial Setup
-cachedPlayers = Players:GetPlayers()
-if espActive then updateESP() end
