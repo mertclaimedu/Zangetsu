@@ -41,6 +41,7 @@ local standActive = false
 local backpackActive = false
 local doggyActive = false
 local dragActive = false
+local walkOnAirEnabled = false -- New: Walk Air state
 
 -- Headbang State
 local isHeadbangActive = false
@@ -48,6 +49,11 @@ local headbangTarget = nil
 local noclipParts = {}
 local headbangConn = nil
 local lastPos = nil
+
+-- Walk Air State
+local airPlatform = nil -- New: Reference to the air platform
+local movingUp = false -- New: Vertical movement state
+local movingDown = false -- New: Vertical movement state
 
 -- Feature Parameters
 local aimlockFOV = 150
@@ -64,6 +70,11 @@ local maxDist = 4
 local speed = 20
 local headbangHeightOffset = 1.38
 local headbangEnabled = false
+
+-- Walk Air Parameters
+local walkAirVerticalSpeed = 20 -- New: Vertical speed for Walk Air
+local airPlatformSize = Vector3.new(5, 1, 5) -- New: Size of the invisible platform
+local platformYOffset = 3.5 -- New: Y offset of the platform relative to HRP
 
 -- Target State
 local lockedTarget = nil
@@ -97,7 +108,8 @@ local keybinds = {
 	ClickTeleport = nil,
 	Fly = nil,
 	Speed = nil,
-	Headbang = nil
+	Headbang = nil,
+	WalkAir = nil -- New: Walk Air keybind
 }
 
 -- Cached Data
@@ -264,6 +276,74 @@ local function startHeadbang()
 	end
 end
 
+-- New: Walk Air Functions
+local function createAirPlatform()
+	if airPlatform then return end
+	if not rootPart then return end
+
+	airPlatform = Instance.new("Part")
+	airPlatform.Size = airPlatformSize
+	airPlatform.Transparency = 1
+	airPlatform.CanCollide = true
+	airPlatform.Anchored = true
+	airPlatform.Name = "AirPlatform"
+	-- Optional: Set CollisionGroupId to avoid colliding with other things if needed
+	-- local physicsService = game:GetService("PhysicsService")
+	-- physicsService:CreateCollisionGroup("AirPlatformGroup")
+	-- physicsService:CollisionGroupSetCollidable("AirPlatformGroup", "Default", false) -- Adjust as needed
+	-- airPlatform.CollisionGroupId = physicsService:GetCollisionGroupId("AirPlatformGroup")
+	airPlatform.Parent = workspace
+	updatePlatformPosition() -- Initial position
+end
+
+local function removeAirPlatform()
+	if airPlatform then
+		airPlatform:Destroy()
+		airPlatform = nil
+	end
+end
+
+local function updatePlatformPosition()
+	if not airPlatform or not rootPart then return end
+	airPlatform.CFrame = CFrame.new(rootPart.Position.X, rootPart.Position.Y - platformYOffset, rootPart.Position.Z)
+end
+
+local function handleVerticalMovement(dt)
+	if not walkOnAirEnabled or not rootPart then return end
+
+	local deltaY = 0
+
+	if movingUp then
+		deltaY = walkAirVerticalSpeed * dt
+	end
+
+	if movingDown then
+		deltaY = -walkAirVerticalSpeed * dt
+	end
+
+	if deltaY ~= 0 then
+		rootPart.CFrame = rootPart.CFrame + Vector3.new(0, deltaY, 0)
+		updatePlatformPosition()
+	end
+end
+
+local function toggleWalkOnAir(enable)
+	walkOnAirEnabled = enable
+	if humanoid then
+		-- Disable/Enable default jump state
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, not enable)
+	end
+
+	if enable then
+		createAirPlatform()
+	else
+		removeAirPlatform()
+		movingUp = false -- Reset vertical movement state
+		movingDown = false
+	end
+end
+
+
 -- GUI Setup
 local gui = create("ScreenGui", {Name = "Zangetsu", ResetOnSpawn = false, IgnoreGuiInset = true, Parent = player:WaitForChild("PlayerGui")})
 local mainFrame = create("Frame", {Size = UDim2.new(0, 540, 0, 520), Position = UDim2.new(0.5, -270, 0.5, -260), BackgroundColor3 = colors.Background, BackgroundTransparency = menuTransparency, Visible = false, Parent = gui})
@@ -338,6 +418,7 @@ local function cleanupMenu()
 	for p in pairs(espHighlights) do if espHighlights[p] then espHighlights[p]:Destroy() end espHighlights[p] = nil end
 	for p in pairs(espNames) do if espNames[p] then espNames[p]:Destroy() end espNames[p] = nil end
 	stopHeadbang()
+	removeAirPlatform() -- New: Remove platform on cleanup
 	if fovCone then fovCone:Destroy() fovCone = nil end
 	if colorCorrection then colorCorrection:Destroy() colorCorrection = nil end
 	if rootPart and rootPart:FindFirstChild("BreakVelocity") then rootPart.BreakVelocity:Destroy() end
@@ -345,6 +426,7 @@ local function cleanupMenu()
 		humanoid.PlatformStand = false
 		humanoid.Sit = false
 		pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) -- New: Ensure jump is enabled
 	end
 	if rootPart then
 		rootPart.Velocity = Vector3.zero
@@ -375,8 +457,10 @@ local function addToggle(name, def, y, cb, parent)
 	table.insert(toggleCallbacks[name], function(s)
 		toggleStates[name] = s
 		tf.BackgroundColor3 = s and colors.ToggleOn or colors.ToggleOff
-		if name == "Speed" and s then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end end
-		if name == "Fly" and s then for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(false) end end
+		-- Handle mutual exclusion for movement types
+		if name == "Speed" and s then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end for _, c in pairs(toggleCallbacks["Walk Air"] or {}) do c(false) end end -- New: Disable Walk Air
+		if name == "Fly" and s then for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(false) end for _, c in pairs(toggleCallbacks["Walk Air"] or {}) do c(false) end end -- New: Disable Walk Air
+		if name == "Walk Air" and s then for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(false) end for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end end -- New: Disable Speed/Fly
 		cb(s)
 	end)
 	local function upd(s) for _, c in pairs(toggleCallbacks[name]) do c(s) end end
@@ -622,13 +706,13 @@ end, visualsTab)
 visualsTab.CanvasSize = UDim2.new(0, 0, 0, 290)
 
 -- Player Tab
-local csf, cst = addToggle("Speed", false, 0, function(on) if not rootPart then return end if on and flyActive then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end end speedActive = on end, playerTab)
+local csf, cst = addToggle("Speed", false, 0, function(on) if not rootPart then return end speedActive = on end, playerTab)
 local csi = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(speedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = csf})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = csi})
 csi.FocusLost:Connect(function(e) if e then local v = tonumber(csi.Text) if v then speedValue = math.clamp(v, 50, 50000) end end end)
+
 local ff, flyToggle = addToggle("Fly", false, 40, function(on)
 	if not rootPart or not humanoid then return end
-	if on and speedActive then cst(false) end
 	flyActive = on
 	humanoid.PlatformStand = on
 	if on then
@@ -651,10 +735,19 @@ end, playerTab)
 local fsi = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(flySpeedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = ff})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = fsi})
 fsi.FocusLost:Connect(function(e) if e then local v = tonumber(fsi.Text) if v then flySpeedValue = math.clamp(v, 50, 50000) end end end)
+
 addToggle("Noclip", false, 80, function(on) noclipActive = on end, playerTab)
 local y = 120
 addToggle("Click Teleport", false, y, function(on) clickTeleportActive = on end, playerTab) y = y + 45
 addToggle("Infinite Jump", false, y, function(state) infiniteJumpEnabled = state end, playerTab) y = y + 45
+
+-- New: Walk Air Toggle and Speed TextBox
+local waf, wat = addToggle("Walk Air", false, y, function(on) toggleWalkOnAir(on) end, playerTab) y = y + 45
+local wasi = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(walkAirVerticalSpeed), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = waf})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = wasi})
+wasi.FocusLost:Connect(function(e) if e then local v = tonumber(wasi.Text) if v then walkAirVerticalSpeed = math.clamp(v, 1, 1000) end end end)
+
+
 local headbangFrame, headbangToggle = addToggle("Headbang", false, y, function(on)
 	headbangEnabled = on
 	if not on and isHeadbangActive then stopHeadbang() end
@@ -1244,10 +1337,10 @@ end
 
 createAnimationsGrid(animButtons, animationsTab)
 
-local customAnimHeader = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 750), BackgroundTransparency = 1, Text = "Custom Animation Controls", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = animationsTab})
-local animTypes = {"Idle", "Run", "Walk", "Jump", "Fall", "Swim", "Climb"}
+ customAnimHeader = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 750), BackgroundTransparency = 1, Text = "Custom Animation Controls", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = animationsTab})
+ animTypes = {"Idle", "Run", "Walk", "Jump", "Fall", "Swim", "Climb"}
 for i, animType in ipairs(animTypes) do
-	local yPos = 790 + (i - 1) * 40
+	 yPos = 790 + (i - 1) * 40
 	create("TextLabel", {Size = UDim2.new(0, 100, 0, 30), Position = UDim2.new(0, 10, 0, yPos), BackgroundTransparency = 1, Text = animType .. ":", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = animationsTab})
 	local tb = create("TextBox", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 120, 0, yPos), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "ID", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = tb})
@@ -1267,28 +1360,28 @@ for i, animType in ipairs(animTypes) do
 	individualLoadButtons[animType] = loadBtn
 end
 
- applyBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 10, 0, 1100), BackgroundColor3 = colors.Interface, Text = "Apply Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+applyBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 10, 0, 1100), BackgroundColor3 = colors.Interface, Text = "Apply Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = applyBtn})
- resetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, 1100), BackgroundColor3 = colors.Button, Text = "Reset Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+resetBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, 1100), BackgroundColor3 = colors.Button, Text = "Reset Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = resetBtn})
- loadAnimationBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 270, 0, 1100), BackgroundColor3 = colors.Button, Text = "Load Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+loadAnimationBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 270, 0, 1100), BackgroundColor3 = colors.Button, Text = "Load Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = loadAnimationBtn})
 loadAnimationBtn.MouseButton1Click:Connect(function()
 	loadAllToggle = not loadAllToggle
 	loadAnimationBtn.Text = loadAllToggle and "Select Animation" or "Load Animation"
 end)
 
-local animSpeedToggleFrame, animSpeedToggle = addToggle("Custom Speed", false, 1140, function(on) customAnimSpeedEnabled = on end, animationsTab)
-local animSpeedSlider = addSlider("Animation Speed", 0, 25, 1, 1180, function(v) animationSpeedMultiplier = v end, animationsTab, false, false)
+ animSpeedToggleFrame, animSpeedToggle = addToggle("Custom Speed", false, 1140, function(on) customAnimSpeedEnabled = on end, animationsTab)
+ animSpeedSlider = addSlider("Animation Speed", 0, 25, 1, 1180, function(v) animationSpeedMultiplier = v end, animationsTab, false, false)
 
-local emoteBtnY = 1220
-local function emoteScript() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Gi7331/scripts/main/Emote.lua"))() end
+ emoteBtnY = 1220
+ function emoteScript() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Gi7331/scripts/main/Emote.lua"))() end
 addActionButton("Emote", 10, emoteBtnY, function()
 	notify("Zangetsu", "Open with ,", 5)
 	emoteScript()
 end, animationsTab, 120)
 
-local function applyCustomAnimations()
+ function applyCustomAnimations()
 	if not character or not character:FindFirstChild("Animate") then return end
 	local Animate = character.Animate
 	Animate.Disabled = true
@@ -1311,7 +1404,7 @@ local function applyCustomAnimations()
 	Animate.Disabled = false
 end
 
-local function resetAnimations()
+ function resetAnimations()
 	if not character or not character:FindFirstChild("Animate") then return end
 	local Animate = character.Animate
 	Animate.Disabled = true
@@ -1343,9 +1436,10 @@ addKeybind("ClickTeleport", keybinds.ClickTeleport, 90)
 addKeybind("Fly", keybinds.Fly, 120)
 addKeybind("Speed", keybinds.Speed, 150)
 addKeybind("Headbang", nil, 180)
+addKeybind("Walk Air", keybinds.WalkAir, 210) -- New: Add Walk Air keybind
 
 -- Configuration Functions
- function serializeConfig()
+function serializeConfig()
 	local kb = {}
 	for name, bind in pairs(keybinds) do
 		kb[name] = bind and {Type = bind.Type, Value = bind.Value.Name}
@@ -1363,14 +1457,16 @@ addKeybind("Headbang", nil, 180)
 			HeadbangMinDist = minDist,
 			HeadbangMaxDist = maxDist,
 			HeadbangSpeed = speed,
-			HeadbangHeightOffset = headbangHeightOffset
+			HeadbangHeightOffset = headbangHeightOffset,
+			WalkAirEnabled = toggleStates["Walk Air"], -- New: Save Walk Air state
+			WalkAirVerticalSpeed = walkAirVerticalSpeed -- New: Save Walk Air speed
 		},
 		ui = {Transparency = sliderValues["Transparency"]},
 		animation = {CustomSpeedEnabled = customAnimSpeedEnabled, SpeedMultiplier = animationSpeedMultiplier}
 	})
 end
 
- function applyConfig(jsonStr)
+function applyConfig(jsonStr)
 	local config = HttpService:JSONDecode(jsonStr)
 	if config.keybinds then
 		for name in pairs(keybinds) do keybinds[name] = nil if keybindButtons[name] then keybindButtons[name].Text = "None" end end
@@ -1396,12 +1492,15 @@ end
 		maxDist = config.player.HeadbangMaxDist or maxDist
 		speed = config.player.HeadbangSpeed or speed
 		headbangHeightOffset = config.player.HeadbangHeightOffset or headbangHeightOffset
+		walkAirVerticalSpeed = config.player.WalkAirVerticalSpeed or walkAirVerticalSpeed -- New: Load Walk Air speed
 		csi.Text = tostring(speedValue)
 		fsi.Text = tostring(flySpeedValue)
 		minDistBox.Text = tostring(minDist)
 		maxDistBox.Text = tostring(maxDist)
 		speedBox.Text = tostring(speed)
 		heightOffsetBox.Text = tostring(headbangHeightOffset)
+		wasi.Text = tostring(walkAirVerticalSpeed) -- New: Update Walk Air speed TextBox
+		if config.player.WalkAirEnabled ~= nil and toggleCallbacks["Walk Air"] then toggleCallbacks["Walk Air"][1](config.player.WalkAirEnabled) end -- New: Load Walk Air state
 	end
 	if config.ui and config.ui.Transparency then
 		sliderValues["Transparency"] = config.ui.Transparency
@@ -1416,14 +1515,14 @@ end
 -- Settings Tab
 addSlider("Transparency", 0, 1, menuTransparency, 20, function(v) mainFrame.BackgroundTransparency = v keybindsFrame.BackgroundTransparency = v end, settingsTab, false, false)
 create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 60), BackgroundTransparency = 1, Text = "Configuration", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
- configNameBox = create("TextBox", {Size = UDim2.new(0.7, 0, 0, 30), Position = UDim2.new(0, 10, 0, 100), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "Config name", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+configNameBox = create("TextBox", {Size = UDim2.new(0.7, 0, 0, 30), Position = UDim2.new(0, 10, 0, 100), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "Config name", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = configNameBox})
- configListFrame = create("ScrollingFrame", {Size = UDim2.new(0.7, 0, 0, 150), Position = UDim2.new(0, 10, 0, 140), BackgroundColor3 = colors.Background, CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 4, Parent = settingsTab})
+configListFrame = create("ScrollingFrame", {Size = UDim2.new(0.7, 0, 0, 150), Position = UDim2.new(0, 10, 0, 140), BackgroundColor3 = colors.Background, CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 4, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = configListFrame})
 create("UIListLayout", {Padding = UDim.new(0, 5), Parent = configListFrame})
 local selectedConfig, autoloadConfig
-local configButtons = {}
-local function refreshConfigList()
+ configButtons = {}
+ function refreshConfigList()
 	for _, child in pairs(configListFrame:GetChildren()) do if child:IsA("TextButton") or child:IsA("ImageLabel") then child:Destroy() end end
 	configButtons = {}
 	local files = listfiles("ZangetsuConfig") or {}
@@ -1453,7 +1552,7 @@ local function refreshConfigList()
 end
 task.spawn(function() while true do if tabContents["Settings"].Visible then refreshConfigList() end task.wait(1) end end)
 
- createBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 300), BackgroundColor3 = colors.Button, Text = "Create config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+createBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 300), BackgroundColor3 = colors.Button, Text = "Create config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = createBtn})
 createBtn.MouseButton1Click:Connect(function()
 	local name = configNameBox.Text:gsub("[^%w_]", "_")
@@ -1463,7 +1562,7 @@ createBtn.MouseButton1Click:Connect(function()
 	pcall(function() writefile(filePath, serializeConfig()) notify("Config Created", "Config '" .. name .. "' created.", 5) refreshConfigList() end)
 end)
 
- loadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 300), BackgroundColor3 = colors.Button, Text = "Load config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+loadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 300), BackgroundColor3 = colors.Button, Text = "Load config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = loadBtn})
 loadBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1472,14 +1571,14 @@ loadBtn.MouseButton1Click:Connect(function()
 	pcall(function() applyConfig(readfile(filePath)) notify("Config Loaded", "Config '" .. selectedConfig .. "' loaded.", 5) end)
 end)
 
- unsetAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 340), BackgroundColor3 = colors.Button, Text = "Unset Autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+unsetAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, 340), BackgroundColor3 = colors.Button, Text = "Unset Autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = unsetAutoloadBtn})
 unsetAutoloadBtn.MouseButton1Click:Connect(function()
 	if not isfile("ZangetsuConfig/autoload.txt") then return end
 	pcall(function() delfile("ZangetsuConfig/autoload.txt") notify("Autoload Unset", "Autoload unset.", 5) autoloadLabel.Text = "Current autoload config: none" refreshConfigList() end)
 end)
 
- overwriteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 300), BackgroundColor3 = colors.Button, Text = "Overwrite config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+overwriteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 300), BackgroundColor3 = colors.Button, Text = "Overwrite config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = overwriteBtn})
 overwriteBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1488,7 +1587,7 @@ overwriteBtn.MouseButton1Click:Connect(function()
 	pcall(function() writefile(filePath, serializeConfig()) notify("Config Overwritten", "Config '" .. selectedConfig .. "' overwritten.", 5) end)
 end)
 
- deleteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 340), BackgroundColor3 = colors.Button, Text = "Delete config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+deleteBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 340), BackgroundColor3 = colors.Button, Text = "Delete config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = deleteBtn})
 deleteBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1503,7 +1602,7 @@ deleteBtn.MouseButton1Click:Connect(function()
 	end)
 end)
 
- setAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 340), BackgroundColor3 = colors.Button, Text = "Set as autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+setAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, 340), BackgroundColor3 = colors.Button, Text = "Set as autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = setAutoloadBtn})
 setAutoloadBtn.MouseButton1Click:Connect(function()
 	if not selectedConfig then return end
@@ -1512,7 +1611,7 @@ setAutoloadBtn.MouseButton1Click:Connect(function()
 	pcall(function() writefile("ZangetsuConfig/autoload.txt", selectedConfig) notify("Autoload Set", "Config '" .. selectedConfig .. "' set as autoload.", 5) autoloadLabel.Text = "Current autoload config: " .. selectedConfig refreshConfigList() end)
 end)
 
- autoloadLabel = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 10, 0, 380), BackgroundTransparency = 1, Text = "Current autoload config: none", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
+autoloadLabel = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 10, 0, 380), BackgroundTransparency = 1, Text = "Current autoload config: none", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
 local resetBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, 420), BackgroundColor3 = colors.Button, Text = "Reset to defaults", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = resetBtn})
 resetBtn.MouseButton1Click:Connect(function()
@@ -1525,11 +1624,14 @@ resetBtn.MouseButton1Click:Connect(function()
 	if sliderCallbacks["FOV"] then sliderCallbacks["FOV"][1](70) end
 	if toggleCallbacks["Infinite Zoom"] then toggleCallbacks["Infinite Zoom"][1](false) end
 	if toggleCallbacks["Click Teleport"] then toggleCallbacks["Click Teleport"][1](false) end
+	-- Reset all toggles except Infinite Zoom, Click Teleport, Custom Speed, and the new Walk Air
 	for name, callbacks in pairs(toggleCallbacks) do
-		if name ~= "Infinite Zoom" and name ~= "Click Teleport" and name ~= "Custom Speed" then
+		if name ~= "Infinite Zoom" and name ~= "Click Teleport" and name ~= "Custom Speed" and name ~= "Walk Air" then -- New: Exclude Walk Air
 			for _, cb in pairs(callbacks) do cb(false) end
 		end
 	end
+	-- Explicitly reset Walk Air
+	if toggleCallbacks["Walk Air"] then toggleCallbacks["Walk Air"][1](false) end -- New: Reset Walk Air toggle
 	for name, callbacks in pairs(buttonCallbacks) do
 		for _, cb in pairs(callbacks) do cb(false) end
 	end
@@ -1539,12 +1641,14 @@ resetBtn.MouseButton1Click:Connect(function()
 	maxDist = 4
 	speed = 20
 	headbangHeightOffset = 1.38
+	walkAirVerticalSpeed = 20 -- New: Reset Walk Air speed
 	csi.Text = tostring(speedValue)
 	fsi.Text = tostring(flySpeedValue)
 	minDistBox.Text = tostring(minDist)
 	maxDistBox.Text = tostring(maxDist)
 	speedBox.Text = tostring(speed)
 	heightOffsetBox.Text = tostring(headbangHeightOffset)
+	wasi.Text = tostring(walkAirVerticalSpeed) -- New: Update Walk Air speed TextBox
 	if toggleCallbacks["Custom Speed"] then toggleCallbacks["Custom Speed"][1](false) end
 	if sliderCallbacks["Animation Speed"] then sliderCallbacks["Animation Speed"][1](1) end
 end)
@@ -1553,7 +1657,7 @@ settingsTab.CanvasSize = UDim2.new(0, 0, 0, 460)
 -- Autoload Check
 if isfile("ZangetsuConfig/autoload.txt") then
 	local autoloadName = readfile("ZangetsuConfig/autoload.txt")
-	local filePath = "ZangetsuConfig/" .. autoloadName .. ".json"
+	 filePath = "ZangetsuConfig/" .. autoloadName .. ".json"
 	if isfile(filePath) then
 		applyConfig(readfile(filePath))
 		autoloadLabel.Text = "Current autoload config: " .. autoloadName
@@ -1563,19 +1667,19 @@ if isfile("ZangetsuConfig/autoload.txt") then
 end
 
 -- Color Picker
- cpf = create("Frame", {Size = UDim2.new(0, 180, 0, 140), Position = UDim2.new(0.5, -90, 0.5, -70), BackgroundColor3 = colors.Background, Visible = false, Parent = gui})
+cpf = create("Frame", {Size = UDim2.new(0, 180, 0, 140), Position = UDim2.new(0.5, -90, 0.5, -70), BackgroundColor3 = colors.Background, Visible = false, Parent = gui})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = cpf})
- db = create("Frame", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = colors.Header, Parent = cpf})
+db = create("Frame", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = colors.Header, Parent = cpf})
 create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = db})
 create("TextLabel", {Size = UDim2.new(0.8, 0, 1, 0), Position = UDim2.new(0.1, 0, 0, 0), BackgroundTransparency = 1, Text = "Color Picker", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = db})
- cbx = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -24, 0, 2), BackgroundColor3 = colors.Button, Text = "X", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = db})
+cbx = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -24, 0, 2), BackgroundColor3 = colors.Button, Text = "X", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = db})
 create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = cbx})
 cbx.MouseButton1Click:Connect(function() cpf.Visible = false end)
- cp = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, 114), BackgroundColor3 = colors.ESP, Parent = cpf})
+cp = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, 114), BackgroundColor3 = colors.ESP, Parent = cpf})
 create("UICorner", {CornerRadius = UDim.new(0, 4), Parent = cp})
 
- function createSlider(label, y, callback)
-	 sf = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, y), BackgroundColor3 = colors.Button, Parent = cpf})
+function createSlider(label, y, callback)
+	sf = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, y), BackgroundColor3 = colors.Button, Parent = cpf})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = sf})
 	local fill = create("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = colors.Interface, Parent = sf})
 	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = fill})
@@ -1593,11 +1697,11 @@ create("UICorner", {CornerRadius = UDim.new(0, 4), Parent = cp})
 	return fill
 end
 
- hf = createSlider("H", 30, function(v) local h, s, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(v, s, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
- sf = createSlider("S", 54, function(v) local h, _, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, v, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
- vf = createSlider("V", 78, function(v) local h, s = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, s, v) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
+hf = createSlider("H", 30, function(v) local h, s, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(v, s, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
+sf = createSlider("S", 54, function(v) local h, _, v_old = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, v, v_old) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
+vf = createSlider("V", 78, function(v) local h, s = colors.ESP:ToHSV() local newColor = Color3.fromHSV(h, s, v) cp.BackgroundColor3 = newColor updateESPColor(newColor) end)
 
- function openColorPicker()
+function openColorPicker()
 	cpf.Visible = not cpf.Visible
 	if cpf.Visible then
 		local h, s, v = colors.ESP:ToHSV()
@@ -1609,9 +1713,9 @@ end
 end
 espColorBtn.MouseButton1Click:Connect(openColorPicker)
 
- dragging = false
- startPos = nil
- startFramePos = nil
+dragging = false
+startPos = nil
+startFramePos = nil
 
 db.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1636,14 +1740,14 @@ tabs["Visuals"].BackgroundColor3 = colors.TabSelected
 tabContents["Visuals"].Visible = true
 
 -- Helper Functions for Keybinds
- function isKeybindPressed(keybind, input)
+function isKeybindPressed(keybind, input)
 	if not keybind then return false end
 	if keybind.Type == "Keyboard" and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind.Value then return true
 	elseif keybind.Type == "MouseButton" and input.UserInputType == keybind.Value then return true end
 	return false
 end
 
- function isKeybindDown(keybind)
+function isKeybindDown(keybind)
 	if not keybind then return false end
 	if keybind.Type == "Keyboard" then return UserInputService:IsKeyDown(keybind.Value)
 	elseif keybind.Type == "MouseButton" then return UserInputService:IsMouseButtonPressed(keybind.Value) end
@@ -1652,10 +1756,12 @@ end
 
 -- Main Loop
 RunService.RenderStepped:Connect(function(dt)
-	if not character or not rootPart then return end
+	if not character or not rootPart or not humanoid then return end -- Ensure humanoid exists
+
 	local cf = camera.CFrame
 	if viewActive then camera.CameraType = Enum.CameraType.Follow return end
-	local movement = nil
+
+	-- Handle Aimlock
 	if aimlockActive then
 		local t = lockedTarget or getTargetInFOV()
 		if t then
@@ -1670,28 +1776,41 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 	end
 	if showFOVCone and fovCone then fovCone.Position = UDim2.new(0.5, -aimlockFOV, 0.5, -aimlockFOV) end
+
+	-- Handle Movement Features (mutually exclusive)
+	local movement = nil
 	if speedActive then
-		movement = movement or getMovement(cf, false)
+		movement = getMovement(cf, false)
 		if movement.Magnitude > 0 then
 			local mxz = Vector3.new(movement.X, 0, movement.Z).Unit * speedValue * dt
 			rootPart.CFrame = CFrame.new(rootPart.Position + mxz) * rootPart.CFrame.Rotation
 		end
-	end
-	if flyActive and bodyVelocity and bodyGyro then
-		movement = movement or getMovement(cf, true)
+	elseif flyActive and bodyVelocity and bodyGyro then
+		movement = getMovement(cf, true)
 		bodyVelocity.Velocity = movement.Magnitude > 0 and movement.Unit * flySpeedValue or Vector3.new()
 		bodyGyro.CFrame = cf
+	elseif walkOnAirEnabled then -- New: Handle Walk Air movement
+		-- Horizontal movement is handled by default character movement on the platform
+		-- Vertical movement is handled by handleVerticalMovement
+		updatePlatformPosition() -- Ensure platform stays with player horizontally
+		handleVerticalMovement(dt) -- Handle vertical movement
 	end
+
 	if noclipActive then for _, p in pairs(character:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end
 	if timeLocked then Lighting.ClockTime = sliderValues["Time"] or originalSettings.ClockTime end
 	if character and character.Humanoid then for _, track in pairs(character.Humanoid:GetPlayingAnimationTracks()) do track:AdjustSpeed(customAnimSpeedEnabled and animationSpeedMultiplier or 1) end end
 end)
 
 -- Infinite Jump
-UserInputService.JumpRequest:Connect(function() if infiniteJumpEnabled and character and humanoid then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end end)
+UserInputService.JumpRequest:Connect(function()
+	-- Only allow infinite jump if Walk Air is NOT enabled
+	if infiniteJumpEnabled and character and humanoid and not walkOnAirEnabled then
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
 
 -- Character Update
- function updateCharacter(c)
+function updateCharacter(c)
 	if not c then return end
 	character = c
 	rootPart = c:WaitForChild("HumanoidRootPart", 3)
@@ -1720,6 +1839,7 @@ UserInputService.JumpRequest:Connect(function() if infiniteJumpEnabled and chara
 			if swimAnim then defaultAnimations["Swim"] = swimAnim.AnimationId end
 		end
 	end
+	-- Re-apply states that persist across respawn
 	if flyActive then
 		humanoid.PlatformStand = true
 		local bv = Instance.new("BodyVelocity")
@@ -1735,6 +1855,13 @@ UserInputService.JumpRequest:Connect(function() if infiniteJumpEnabled and chara
 		bodyGyro = bg
 	end
 	if espActive then updateESP() end
+	updateNoclip(noclipActive) -- Re-apply noclip
+	-- Ensure jump is enabled by default
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+	-- If Walk Air was active, re-apply it (this will disable jump again)
+	if walkOnAirEnabled then toggleWalkOnAir(true) end -- New: Re-apply Walk Air state
+
+	-- Reset target-based features on respawn
 	stopHeadbang()
 	if flingActive then for _, cb in pairs(buttonCallbacks["Fling"] or {}) do cb(false) end end
 	if bangActive then for _, cb in pairs(buttonCallbacks["Bang"] or {}) do cb(false) end end
@@ -1748,9 +1875,9 @@ player.CharacterAdded:Connect(updateCharacter)
 if player.Character then updateCharacter(player.Character) end
 
 -- GUI Dragging
- dragStart = nil
- startFramePos = nil
- draggingGUI = false
+dragStart = nil
+startFramePos = nil
+draggingGUI = false
 
 header.InputBegan:Connect(function(i)
 	if i.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1772,7 +1899,7 @@ UserInputService.InputEnded:Connect(function(i)
 end)
 
 -- Menu Toggle and Keybinds
- clickTeleportKeyHeld = false
+clickTeleportKeyHeld = false
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed then return end
 	if isKeybindPressed(keybinds.Menu, input) then
@@ -1786,6 +1913,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		for _, cb in pairs(toggleCallbacks["Fly"] or {}) do cb(not flyActive) end
 	elseif isKeybindPressed(keybinds.Speed, input) then
 		for _, cb in pairs(toggleCallbacks["Speed"] or {}) do cb(not speedActive) end
+	elseif isKeybindPressed(keybinds["Walk Air"], input) then -- New: Walk Air keybind toggle
+		for _, cb in pairs(toggleCallbacks["Walk Air"] or {}) do cb(not walkOnAirEnabled) end
 	elseif headbangEnabled and isKeybindPressed(keybinds.Headbang, input) then
 		if isHeadbangActive then
 			stopHeadbang()
@@ -1795,11 +1924,29 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	elseif keybinds.ClickTeleport and keybinds.ClickTeleport.Type == "Keyboard" and input.KeyCode == keybinds.ClickTeleport.Value then
 		clickTeleportKeyHeld = true
 	end
+
+	-- New: Handle vertical movement keys ONLY when Walk Air is enabled
+	if walkOnAirEnabled then
+		if input.KeyCode == Enum.KeyCode.Space then
+			movingUp = true
+		elseif input.KeyCode == Enum.KeyCode.LeftControl then
+			movingDown = true
+		end
+	end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
 	if keybinds.ClickTeleport and keybinds.ClickTeleport.Type == "Keyboard" and input.KeyCode == keybinds.ClickTeleport.Value then
 		clickTeleportKeyHeld = false
+	end
+
+	-- New: Stop vertical movement when keys are released ONLY when Walk Air is enabled
+	if walkOnAirEnabled then
+		if input.KeyCode == Enum.KeyCode.Space then
+			movingUp = false
+		elseif input.KeyCode == Enum.KeyCode.LeftControl then
+			movingDown = false
+		end
 	end
 end)
 
