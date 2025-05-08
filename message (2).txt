@@ -1,0 +1,2141 @@
+Players = game:GetService("Players")
+Lighting = game:GetService("Lighting")
+UserInputService = game:GetService("UserInputService")
+RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+HttpService = game:GetService("HttpService")
+TeleportService = game:GetService("TeleportService")
+StarterGui = game:GetService("StarterGui")
+TweenService = game:GetService("TweenService")
+
+-- Player and Camera References
+player = Players.LocalPlayer
+camera = workspace.CurrentCamera
+local character, rootPart, humanoid
+
+-- Original Settings
+originalSettings = {MaxZoom = player.CameraMaxZoomDistance, FOV = camera.FieldOfView, ClockTime = Lighting.ClockTime, Materials = {}, Transparency = {}}
+colorCorrection = Lighting:FindFirstChild("CustomColorCorrection") or Instance.new("ColorCorrectionEffect", Lighting) colorCorrection.Name = "CustomColorCorrection"
+
+-- Animation State
+defaultAnimations = {}
+animationSpeedMultiplier = 1
+customAnimSpeedEnabled = false
+
+-- Feature States
+aimlockActive, espActive, wallhackActive, lowTextureActive = false, false, false, false
+predictionActive = false
+aimlockToggleMode, aimlockLocked = false, false
+espHighlights, espNames = {}, {}
+speedActive, flyActive, clickTeleportActive = false, false, false
+infiniteJumpEnabled = false
+spinEnabled = false
+timeLocked = false
+viewActive = false
+headsitActive = false
+backpackActive = false
+
+-- Headbang State
+isHeadbangActive = false
+headbangTarget = nil
+headbangConn = nil
+lastPos = nil
+
+-- Feature Parameters
+aimlockFOV = 150
+showFOVCone = false
+fovCone = nil
+speedValue = 300
+flySpeedValue = 300
+spinSpeed = 5
+aimlockTargetPart = "Head"
+
+-- Headbang Parameters
+minDist = 1.5
+maxDist = 4
+headbangOscillationSpeed = 20
+headbangHeightOffset = 1.38
+headbangEnabled = false
+
+-- Target State
+lockedTarget = nil
+targetedPlayer = nil
+
+-- GUI State
+menuTransparency = 0.1
+
+local masterColors = {
+	Background = Color3.fromRGB(0, 0, 0),
+	Accent = Color3.fromRGB(49, 49, 49),
+	Interface = Color3.fromRGB(69, 32, 106)
+}
+
+colors = {
+	Text = Color3.fromRGB(255, 255, 255),
+	ESP = Color3.fromRGB(75, 0, 130),
+
+	Background = masterColors.Background,
+	Header = masterColors.Accent,
+	Button = masterColors.Accent,
+	Interface = masterColors.Interface,
+	ToggleOn = masterColors.Interface,
+	ToggleOff = masterColors.Accent,
+	Outline = masterColors.Accent,
+	KeybindsBG = masterColors.Background,
+	TabSelected = masterColors.Interface,
+	TabUnselected = masterColors.Accent
+}
+
+sliderValues = {}
+toggleStates = {}
+buttonStates = {}
+
+-- Keybinds
+keybinds = {
+	Menu = {Type = "Keyboard", Value = Enum.KeyCode.G},
+	Aimlock = nil,
+	ESP = nil,
+	ClickTeleport = nil,
+	Fly = nil,
+	Speed = nil,
+	Headbang = nil
+}
+-- Keybind Assignment State
+keybindButtons = {}
+currentlyBindingKeyFor = nil
+lastBoundInputObject = nil
+currentBindingConnection = nil
+
+-- Cached Data
+cachedPlayers = Players:GetPlayers()
+seenPlayers = {}
+httprequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+
+-- File System Functions
+isfolder = isfolder or syn and syn.isfolder or fluxus and fluxus.isfolder or function() return false end
+makefolder = makefolder or syn and syn.makefolder or fluxus and fluxus.makefolder or function() end
+isfile = isfile or syn and syn.isfile or fluxus and fluxus.isfile or function() return "" end
+readfile = readfile or syn and syn.readfile or fluxus and fluxus.readfile or function() return "" end
+writefile = writefile or syn and syn.writefile or fluxus and fluxus.writefile or function() end
+delfile = delfile or syn and syn.delfile or fluxus and fluxus.delfile or function() end
+listfiles = listfiles or syn and syn.listfiles or fluxus and fluxus.listfiles or function() return {} end
+
+if not isfolder("ZangetsuConfig") then pcall(function() makefolder("ZangetsuConfig") end) end
+
+-- TweenInfos
+menuAnimInfoOpen = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+menuAnimInfoClose = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+panelSlideInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+knobAnimInfo = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+trackColorAnimInfo = TweenInfo.new(0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+sliderFillAnimInfo = TweenInfo.new(0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+
+-- UI Element References for color updates
+local uiElements = {
+	header = nil,
+	tabFrame = nil,
+	tabs = {},
+	mainFrame = nil,
+	keybindsFrame = nil,
+	keybindsScroll = nil,
+	configListFrame = nil,
+	colorPickerFrame = nil,
+	colorPickerDragBar = nil,
+	-- Dynamic elements like toggles/sliders/buttons will be updated via their callbacks
+	configNameBox = nil,
+	createConfigBtn = nil, loadConfigBtn = nil, overwriteConfigBtn = nil,
+	deleteConfigBtn = nil, unsetAutoloadBtn = nil, setAutoloadBtn = nil,
+	resetToDefaultsBtn = nil,
+	speedValueInput = nil, flySpeedValueInput = nil,
+	headbangHeightOffsetInput = nil, headbangMinDistInput = nil, headbangMaxDistInput = nil, headbangSpeedInput = nil,
+	customAnimTextBoxesRefs = {},
+	applyCustomAnimsBtn = nil, resetAnimsBtn = nil, loadAnimationBtn = nil,
+	emoteBtn = nil, -- Reference for emote button if its color needs updating
+	bgColorPickerButton = nil, accentColorPickerButton = nil, interfaceColorPickerButton = nil, -- Buttons in settings
+	espColorBtnRef = nil, -- Reference to the ESP color button in visuals tab
+	fovConeToggleButtonRef = nil,
+	predictionButtonRef = nil, aimlockModeButtonRef = nil, aimlockTargetPartButtonRef = nil,
+	viewButtonRef = nil, headsitButtonRef = nil, backpackButtonRef = nil,
+	-- Action buttons
+	rejoinBtn = nil, serverHopBtn = nil, jerkBtn = nil,
+	tpToTargetBtn = nil, findNearestBtn = nil, randomTargetBtn = nil,
+	targetInputRef = nil, clickTargetBtnRef = nil,
+	mainFrameGradient = nil, keybindsFrameGradient = nil, headerGradient = nil,
+	hexInputTextBoxRef = nil, -- For Color Picker Hex Input
+	colorPickerHueTrack = nil, colorPickerSatTrack = nil, colorPickerValTrack = nil -- For Color Picker Slider Tracks
+}
+
+-- Utility Functions
+local function create(class, props) local inst = Instance.new(class) for k, v in pairs(props) do inst[k] = v end return inst end
+local function getMovement(cf, verticalMovementEnabled)
+	local direction = Vector3.new()
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + cf.LookVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - cf.LookVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - cf.RightVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then direction = direction + cf.RightVector end
+	if verticalMovementEnabled then
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then direction = direction + Vector3.yAxis end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then direction = direction - Vector3.yAxis end
+	end
+	return direction
+end
+local function notify(title, message, duration) StarterGui:SetCore("SendNotification", {Title = title, Text = message, Duration = duration}) end
+
+local function StopAnim()
+	pcall(function()
+		if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("Animate") then return end
+		local Animate = character.Animate
+		Animate.Disabled = false
+		for _, track in pairs(character.Humanoid:GetPlayingAnimationTracks()) do track:Stop() end
+	end)
+end
+
+local function findNearestPlayer()
+	local closestPlayer, minDistance = nil, math.huge
+	if not rootPart then return nil end
+	local myPosition = rootPart.Position
+
+	for _, otherPlayer in ipairs(cachedPlayers) do
+		if otherPlayer ~= player and otherPlayer.Character then
+			local theirRootPart = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if theirRootPart then
+				local distance = (myPosition - theirRootPart.Position).Magnitude
+				if distance < minDistance then
+					closestPlayer, minDistance = otherPlayer, distance
+				end
+			end
+		end
+	end
+	return closestPlayer
+end
+
+local function updateHeadbangPosition()
+	if not isHeadbangActive or not headbangTarget or not headbangTarget.Character then
+		stopHeadbang()
+		return
+	end
+
+	local targetHead = headbangTarget.Character:FindFirstChild("Head")
+	local targetRootPart = headbangTarget.Character:FindFirstChild("HumanoidRootPart")
+
+	if not targetHead or not targetRootPart then
+		stopHeadbang()
+		return
+	end
+
+	local basePosition = targetHead.Position + Vector3.new(0, headbangHeightOffset, 0)
+	local oscillation = (math.sin(tick() * headbangOscillationSpeed) + 1) / 2
+	local currentDistance = minDist + (maxDist - minDist) * oscillation
+
+	local targetPosition = basePosition + targetRootPart.CFrame.LookVector * currentDistance
+
+	if rootPart then
+		rootPart.CFrame = CFrame.new(targetPosition, basePosition)
+		rootPart.Velocity = Vector3.zero
+		rootPart.RotVelocity = Vector3.zero
+	end
+end
+
+local function stopHeadbang()
+	if not isHeadbangActive then return end
+	isHeadbangActive = false
+	headbangTarget = nil
+	if headbangConn then headbangConn:Disconnect() headbangConn = nil end
+	if humanoid then
+		humanoid.PlatformStand = false
+		pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+	end
+	if rootPart then
+		rootPart.Velocity = Vector3.zero
+		rootPart.RotVelocity = Vector3.zero
+		if lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+	end
+	lastPos = nil
+end
+
+local function startHeadbang()
+	if isHeadbangActive then return end
+	local nearestPlayer = findNearestPlayer()
+	if nearestPlayer then
+		headbangTarget = nearestPlayer
+		if rootPart then lastPos = rootPart.Position end
+		isHeadbangActive = true
+		if humanoid then humanoid.PlatformStand = true end
+		if not headbangConn then
+			headbangConn = RunService.Heartbeat:Connect(function()
+				if isHeadbangActive then
+					updateHeadbangPosition()
+				end
+			end)
+		end
+	else
+		notify("Headbang", "No nearby player found.", 3)
+	end
+end
+
+-- GUI Setup
+gui = create("ScreenGui", {Name = "Zangetsu", ResetOnSpawn = false, IgnoreGuiInset = true, Parent = player:WaitForChild("PlayerGui")})
+originalMenuSize = UDim2.new(0, 540, 0, 520)
+mainFrame = create("Frame", {
+	Size = originalMenuSize,
+	Position = UDim2.new(0.5, -originalMenuSize.X.Offset / 2, 0.5, -originalMenuSize.Y.Offset / 2),
+	BackgroundColor3 = colors.Background,
+	BackgroundTransparency = 1, -- Start fully transparent
+	Visible = false,
+	Parent = gui
+})
+uiElements.mainFrame = mainFrame
+create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = mainFrame})
+uiElements.mainFrameGradient = create("UIGradient", {Color = ColorSequence.new(Color3.fromRGB(20, 20, 40), Color3.fromRGB(50, 50, 80)), Rotation = 45, Parent = mainFrame})
+
+header = create("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = colors.Header, Parent = mainFrame})
+uiElements.header = header
+create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = header})
+create("TextLabel", {Size = UDim2.new(0.7, 0, 0, 40), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Zangetsu", TextColor3 = colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = header})
+
+if not RunService:IsStudio() then
+	local statsLabel = create("TextLabel", {Size = UDim2.new(0, 260, 0, 24), Position = UDim2.new(0.5, -130, 0, 8), BackgroundTransparency = 1, Text = "", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = header})
+	local frameCount, lastUpdate, fps = 0, tick(), 60
+	RunService.RenderStepped:Connect(function()
+		frameCount = frameCount + 1
+		local now = tick()
+		if now - lastUpdate >= 1 then
+			fps = frameCount
+			frameCount = 0
+			lastUpdate = now
+			local ping = math.floor((Stats.Network.ServerStatsItem["Data Ping"]:GetValue() or 0) + 0.5)
+			local playerCount = #Players:GetPlayers()
+			statsLabel.Text = string.format("FPS: %d  |  Ping: %dms  |  Players: %d", fps, ping, playerCount)
+		end
+	end)
+end
+
+tabFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = mainFrame})
+uiElements.tabFrame = tabFrame
+uiListLayout = create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 5), Parent = tabFrame})
+local tabs, tabContents = {}, {}
+local function addTab(name, width)
+	local btn = create("TextButton", {Size = UDim2.new(0, width or 70, 0, 25), BackgroundColor3 = colors.TabUnselected, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = tabFrame})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
+	local cont = create("ScrollingFrame", {Size = UDim2.new(1, -18, 1, -70), Position = UDim2.new(0, 9, 0, 70), BackgroundTransparency = 1, ScrollBarThickness = 0, CanvasSize = UDim2.new(0, 0, 0, 0), Visible = false, Parent = mainFrame})
+	tabs[name] = btn
+	uiElements.tabs[name] = btn -- Store for color updates
+	tabContents[name] = cont
+	btn.MouseButton1Click:Connect(function()
+		for tName, t in pairs(tabs) do t.BackgroundColor3 = tName == name and colors.TabSelected or colors.TabUnselected end
+		for _, c in pairs(tabContents) do c.Visible = false end
+		cont.Visible = true
+	end)
+	return cont
+end
+
+visualsTab = addTab("Visuals", 70)
+playerTab = addTab("Player", 70)
+combatTab = addTab("Combat", 70)
+targetTab = addTab("Target", 70)
+animationsTab = addTab("Animations", 70)
+settingsTab = addTab("Settings", 70)
+
+-- Keybind Panel Setup
+originalKeybindsFrameSize = UDim2.new(0, 200, 0, 520)
+openedKeybindsFramePosition = UDim2.new(1, 0, 0, 0)
+
+keybindsFrame = create("Frame", {
+	Size = originalKeybindsFrameSize,
+	Position = openedKeybindsFramePosition,
+	BackgroundColor3 = colors.KeybindsBG,
+	BackgroundTransparency = 1,
+	Visible = false,
+	Parent = mainFrame
+})
+uiElements.keybindsFrame = keybindsFrame
+create("UICorner", {CornerRadius = UDim.new(0, 12), Parent = keybindsFrame})
+uiElements.keybindsFrameGradient = create("UIGradient", {
+	Color = ColorSequence.new(Color3.fromRGB(20, 20, 40), Color3.fromRGB(50, 50, 80)), -- Identisch zum Hauptmenü
+	Rotation = 45,
+	Parent = keybindsFrame
+})
+keybindsScroll = create("ScrollingFrame", {Size = UDim2.new(1, -10, 1, -10), Position = UDim2.new(0, 5, 0, 5), BackgroundTransparency = 1, ScrollBarThickness = 0, CanvasSize = UDim2.new(0, 0, 0, 400), Parent = keybindsFrame})
+uiElements.keybindsScroll = keybindsScroll
+
+isKeybindPanelAnimating = false
+function toggleKeybindsFrameAnimated()
+	if isKeybindPanelAnimating then return end
+	isKeybindPanelAnimating = true
+
+	if keybindsFrame.Visible then
+		local goalProps = {
+			Size = UDim2.new(0, originalKeybindsFrameSize.X.Offset * 0.7, 0, originalKeybindsFrameSize.Y.Offset * 0.7),
+			Position = UDim2.new(openedKeybindsFramePosition.X.Scale, openedKeybindsFramePosition.X.Offset + (originalKeybindsFrameSize.X.Offset * 0.15),
+				openedKeybindsFramePosition.Y.Scale, openedKeybindsFramePosition.Y.Offset + (originalKeybindsFrameSize.Y.Offset * 0.15)),
+			BackgroundTransparency = 1
+		}
+		local tween = TweenService:Create(keybindsFrame, menuAnimInfoClose, goalProps)
+		tween.Completed:Connect(function()
+			keybindsFrame.Visible = false
+			keybindsFrame.Size = originalKeybindsFrameSize
+			keybindsFrame.Position = openedKeybindsFramePosition
+			keybindsFrame.BackgroundTransparency = menuTransparency
+			isKeybindPanelAnimating = false
+		end)
+		tween:Play()
+	else
+		keybindsFrame.Visible = true
+		keybindsFrame.BackgroundTransparency = 1
+		keybindsFrame.Size = UDim2.new(0, originalKeybindsFrameSize.X.Offset * 0.7, 0, originalKeybindsFrameSize.Y.Offset * 0.7)
+		keybindsFrame.Position = UDim2.new(openedKeybindsFramePosition.X.Scale, openedKeybindsFramePosition.X.Offset + (originalKeybindsFrameSize.X.Offset * 0.15),
+			openedKeybindsFramePosition.Y.Scale, openedKeybindsFramePosition.Y.Offset + (originalKeybindsFrameSize.Y.Offset * 0.15))
+
+		local goalProps = {
+			Size = originalKeybindsFrameSize,
+			Position = openedKeybindsFramePosition,
+			BackgroundTransparency = menuTransparency
+		}
+		local tween = TweenService:Create(keybindsFrame, menuAnimInfoOpen, goalProps)
+		tween.Completed:Connect(function()
+			isKeybindPanelAnimating = false
+		end)
+		tween:Play()
+	end
+end
+create("ImageButton", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -68, 0, 8), BackgroundTransparency = 1, Image = "rbxassetid://6023565895", ImageColor3 = colors.Text, Parent = header}).MouseButton1Click:Connect(toggleKeybindsFrameAnimated)
+
+isMenuAnimating = false
+function openMenu()
+	if mainFrame.Visible and not isMenuAnimating then return end
+	isMenuAnimating = true
+	mainFrame.Visible = true
+	mainFrame.BackgroundTransparency = 1
+	mainFrame.Size = UDim2.new(0, originalMenuSize.X.Offset * 0.7, 0, originalMenuSize.Y.Offset * 0.7)
+	mainFrame.Position = UDim2.new(0.5, -mainFrame.Size.X.Offset / 2, 0.5, (-mainFrame.Size.Y.Offset / 2) - 20)
+
+	local goalProps = {
+		Size = originalMenuSize,
+		Position = UDim2.new(0.5, -originalMenuSize.X.Offset / 2, 0.5, -originalMenuSize.Y.Offset / 2),
+		BackgroundTransparency = menuTransparency
+	}
+	local tween = TweenService:Create(mainFrame, menuAnimInfoOpen, goalProps)
+	tween.Completed:Connect(function() isMenuAnimating = false end)
+	tween:Play()
+end
+
+function closeMenu()
+	if not mainFrame.Visible and not isMenuAnimating then return end
+	isMenuAnimating = true
+
+	local mainGoalProps = {
+		Size = UDim2.new(0, originalMenuSize.X.Offset * 0.7, 0, originalMenuSize.Y.Offset * 0.7),
+		Position = UDim2.new(0.5, -(originalMenuSize.X.Offset * 0.7) / 2, 0.5, (-(originalMenuSize.Y.Offset * 0.7) / 2) - 20),
+		BackgroundTransparency = 1
+	}
+	local mainTween = TweenService:Create(mainFrame, menuAnimInfoClose, mainGoalProps)
+	mainTween.Completed:Connect(function()
+		mainFrame.Visible = false
+		isMenuAnimating = false
+		mainFrame.Size = originalMenuSize
+		mainFrame.Position = UDim2.new(0.5, -originalMenuSize.X.Offset / 2, 0.5, -originalMenuSize.Y.Offset / 2)
+		mainFrame.BackgroundTransparency = menuTransparency
+
+		if keybindsFrame.Visible then
+			keybindsFrame.Visible = false
+			keybindsFrame.Size = originalKeybindsFrameSize
+			keybindsFrame.Position = openedKeybindsFramePosition
+			keybindsFrame.BackgroundTransparency = menuTransparency
+		end
+	end)
+	mainTween:Play()
+
+	if keybindsFrame.Visible and not isKeybindPanelAnimating then
+		local kfGoalProps = {
+			Size = UDim2.new(0, originalKeybindsFrameSize.X.Offset * 0.7, 0, originalKeybindsFrameSize.Y.Offset * 0.7),
+			BackgroundTransparency = 1
+		}
+		local kfTween = TweenService:Create(keybindsFrame, menuAnimInfoClose, kfGoalProps)
+		kfTween:Play()
+	end
+end
+
+local closeBtn = create("TextLabel", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -104, 0, 8), BackgroundTransparency = 1, Text = "-", TextColor3 = colors.Text, TextSize = 28, Font = Enum.Font.FredokaOne, Parent = header})
+closeBtn.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then closeMenu() end end)
+local xBtn = create("ImageButton", {Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -34, 0, 8), BackgroundTransparency = 1, Image = "rbxassetid://6031094678", ImageColor3 = Color3.fromRGB(220, 50, 50), Parent = header})
+local confirmFrame = create("Frame", {Size = UDim2.new(0, 220, 0, 100), Position = UDim2.new(0.5, -110, 0.5, -50), BackgroundColor3 = colors.Header, Visible = false, Parent = gui})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = confirmFrame})
+create("TextLabel", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 10), BackgroundTransparency = 1, Text = "Are you sure u want to close?", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = confirmFrame})
+local yesBtn = create("TextButton", {Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(0, 20, 0, 55), BackgroundColor3 = Color3.fromRGB(200, 50, 50), Text = "Yes", TextColor3 = colors.Text, Parent = confirmFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = yesBtn})
+local noBtn = create("TextButton", {Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(0, 120, 0, 55), BackgroundColor3 = Color3.fromRGB(50, 200, 50), Text = "No", TextColor3 = colors.Text, Parent = confirmFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = noBtn})
+
+local function resetAnimations() -- Forward declaration
+	-- Implementation later
+end
+
+local function cleanupMenu()
+	if gui then gui:Destroy() end
+	keybinds = {}
+	espActive = false
+	wallhackActive = false
+	for p in pairs(espHighlights) do if espHighlights[p] then espHighlights[p]:Destroy() end espHighlights[p] = nil end
+	for p in pairs(espNames) do if espNames[p] then espNames[p]:Destroy() end espNames[p] = nil end
+	stopHeadbang()
+	if fovCone then fovCone:Destroy() fovCone = nil end
+	if colorCorrection then colorCorrection:Destroy() colorCorrection = nil end
+	if character and humanoid then
+		humanoid.PlatformStand = false
+		humanoid.Sit = false
+		pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+	end
+	if rootPart then
+		rootPart.Velocity = Vector3.zero
+		rootPart.RotVelocity = Vector3.zero
+		rootPart.Anchored = false
+	end
+	player.CameraMaxZoomDistance = originalSettings.MaxZoom
+	camera.FieldOfView = originalSettings.FOV
+	Lighting.ClockTime = originalSettings.ClockTime
+	for p, t in pairs(originalSettings.Transparency) do if p and p.Parent then p.Transparency = t end end
+	originalSettings.Transparency = {}
+	for p, m in pairs(originalSettings.Materials) do if p and p.Parent then p.Material = m end end
+	originalSettings.Materials = {}
+	resetAnimations()
+end
+yesBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = false cleanupMenu() end)
+noBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = false end)
+xBtn.MouseButton1Click:Connect(function() confirmFrame.Visible = true for name, upd in pairs(toggleCallbacks) do for _, cb in pairs(upd) do cb(false) end end for name, upd in pairs(buttonCallbacks) do for _, cb in pairs(upd) do cb(false) end end end)
+
+-- UI Element Functions
+local toggleCallbacks = {}
+local function addToggle(name, def, y, cb, parent)
+	toggleStates[name] = def
+	local frame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, y), BackgroundTransparency = 1, Parent = parent})
+	create("TextLabel", {Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = colors.Text, TextSize = 16, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = frame})
+
+	local trackWidth = 50
+	local trackHeight = 20
+	local knobSize = trackHeight - 4
+	local padding = (trackHeight - knobSize) / 2
+
+	local toggleTrack = create("Frame", {
+		Name = "ToggleTrack",
+		Size = UDim2.new(0, trackWidth, 0, trackHeight),
+		Position = UDim2.new(1, -trackWidth - 10, 0.5, -trackHeight / 2),
+		BackgroundColor3 = def and colors.ToggleOn or colors.ToggleOff,
+		BorderSizePixel = 0,
+		Parent = frame
+	})
+	create("UICorner", {CornerRadius = UDim.new(0, trackHeight / 2), Parent = toggleTrack})
+
+	local toggleKnob = create("Frame", {
+		Name = "ToggleKnob",
+		Size = UDim2.new(0, knobSize, 0, knobSize),
+		Position = def and UDim2.new(1, -knobSize - padding, 0.5, -knobSize / 2) or UDim2.new(0, padding, 0.5, -knobSize / 2),
+		BackgroundColor3 = Color3.fromRGB(250, 250, 250),
+		BorderSizePixel = 0,
+		Active = false,
+		Parent = toggleTrack
+	})
+	create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = toggleKnob})
+
+	toggleCallbacks[name] = toggleCallbacks[name] or {}
+	table.insert(toggleCallbacks[name], function(s)
+		toggleStates[name] = s
+
+		local targetKnobPos
+		local targetTrackColor
+		if s then
+			targetKnobPos = UDim2.new(1, -knobSize - padding, 0.5, -knobSize / 2)
+			targetTrackColor = colors.ToggleOn
+		else
+			targetKnobPos = UDim2.new(0, padding, 0.5, -knobSize / 2)
+			targetTrackColor = colors.ToggleOff
+		end
+
+		TweenService:Create(toggleKnob, knobAnimInfo, {Position = targetKnobPos}):Play()
+		TweenService:Create(toggleTrack, trackColorAnimInfo, {BackgroundColor3 = targetTrackColor}):Play()
+
+		if name == "Speed" and s then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end end
+		if name == "Fly" and s then for _, c in pairs(toggleCallbacks["Speed"] or {}) do c(false) end end
+		cb(s)
+	end)
+
+	local function updateToggleState(newState)
+		for _, callbackFn in pairs(toggleCallbacks[name]) do
+			callbackFn(newState)
+		end
+	end
+
+	toggleTrack.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then updateToggleState(not toggleStates[name]) end end)
+	return frame, updateToggleState
+end
+
+local sliderCallbacks = {}
+local function addSlider(name, min, max, def, y, cb, parent, noLabel, noDecimal)
+	sliderValues[name] = def
+	local frame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, y), BackgroundTransparency = 1, Parent = parent})
+	local label = noLabel and nil or create("TextLabel", {Size = UDim2.new(0, 220, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundTransparency = 1, Text = noDecimal and string.format("%s: %d", name, def) or string.format("%s: %.1f", name, def), TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = frame})
+	local sliderFrame = create("Frame", {Size = noLabel and UDim2.new(0.95, 20, 0, 12) or UDim2.new(0, 320, 0, 12), Position = noLabel and UDim2.new(0.025, -20, 0.5, -6) or UDim2.new(0, 190, 0.5, -6), BackgroundColor3 = colors.Button, Parent = frame})
+	create("UICorner", {CornerRadius = UDim.new(0, 6), Parent = sliderFrame})
+	local fill = create("Frame", {Size = UDim2.new((def - min) / (max - min), 0, 1, 0), BackgroundColor3 = colors.Interface, Parent = sliderFrame})
+	create("UICorner", {CornerRadius = UDim.new(0, 6), Parent = fill})
+	sliderCallbacks[name] = sliderCallbacks[name] or {}
+	table.insert(sliderCallbacks[name], function(v)
+		sliderValues[name] = v
+		local newFillSize = UDim2.new((v - min) / (max - min), 0, 1, 0)
+		TweenService:Create(fill, sliderFillAnimInfo, {Size = newFillSize}):Play()
+		fill.BackgroundColor3 = colors.Interface -- Ensure fill color updates if Interface color changes
+		sliderFrame.BackgroundColor3 = colors.Button -- Ensure track color updates
+		if label then label.Text = noDecimal and string.format("%s: %d", name, math.floor(v)) or string.format("%s: %.1f", name, v) end
+		cb(v)
+	end)
+	local dragging = false
+	sliderFrame.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end end)
+	UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+	UserInputService.InputChanged:Connect(function(i)
+		if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+			local percentage = math.clamp((i.Position.X - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X, 0, 1)
+			local value = min + (max - min) * percentage
+			for _, callbackFn in pairs(sliderCallbacks[name]) do callbackFn(value) end
+		end
+	end)
+	return frame
+end
+
+local buttonCallbacks = {}
+local function addButton(name, x, y, cb, parent, initialState, width)
+	buttonStates[name] = initialState or false
+	local button = create("TextButton", {Size = UDim2.new(0, width or 120, 0, 25), Position = UDim2.new(0, x, 0, y), BackgroundColor3 = buttonStates[name] and colors.ToggleOn or colors.ToggleOff, Text = buttonStates[name] and name:gsub("(.+)", "Un%1") or name:gsub("Un(.+)", "%1"), TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = parent})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = button})
+	buttonCallbacks[name] = buttonCallbacks[name] or {}
+	table.insert(buttonCallbacks[name], function(state)
+		buttonStates[name] = state
+		button.BackgroundColor3 = state and colors.ToggleOn or colors.ToggleOff
+		button.Text = state and name:gsub("(.+)", "Un%1") or name:gsub("Un(.+)", "%1")
+		cb(state)
+	end)
+	local function updateButtonState(newState) for _, callbackFn in pairs(buttonCallbacks[name]) do callbackFn(newState) end end
+	button.MouseButton1Click:Connect(function() updateButtonState(not buttonStates[name]) end)
+	return button, updateButtonState
+end
+local function addActionButton(name, x, y, cb, parent, width)
+	local button = create("TextButton", {Size = UDim2.new(0, width or 80, 0, 25), Position = UDim2.new(0, x, 0, y), BackgroundColor3 = colors.Button, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = parent})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = button})
+	button.MouseButton1Click:Connect(cb)
+	return button
+end
+
+local function addKeybind(name, def, y)
+	keybinds[name] = def
+	local frame = create("Frame", {Size = UDim2.new(1, -10, 0, 30), Position = UDim2.new(0, 5, 0, y), BackgroundTransparency = 1, Parent = keybindsScroll})
+	create("TextLabel", {Size = UDim2.new(0.6, 0, 1, 0), BackgroundTransparency = 1, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = frame})
+	local button = create("TextButton", {Size = UDim2.new(0, 60, 0, 20), Position = UDim2.new(1, -65, 0.5, -10), BackgroundColor3 = colors.Button, Text = def and def.Value.Name or "None", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = frame})
+	create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = button})
+	keybindButtons[name] = button
+
+	button.MouseButton1Click:Connect(function()
+		if currentBindingConnection then
+			currentBindingConnection:Disconnect()
+			currentBindingConnection = nil
+		end
+		if currentlyBindingKeyFor and keybindButtons[currentlyBindingKeyFor] and keybindButtons[currentlyBindingKeyFor].Text == "Press..." then
+			keybindButtons[currentlyBindingKeyFor].Text = (keybinds[currentlyBindingKeyFor] and keybinds[currentlyBindingKeyFor].Value.Name) or "None"
+			keybindButtons[currentlyBindingKeyFor].BackgroundColor3 = colors.Button -- Reset color
+		end
+
+		button.Text = "Press..."
+		button.BackgroundColor3 = colors.Interface -- Indicate binding
+		currentlyBindingKeyFor = name
+		lastBoundInputObject = nil
+
+		currentBindingConnection = UserInputService.InputBegan:Connect(function(inputObject, gameProcessedEvent)
+			if currentlyBindingKeyFor ~= name or button.Text ~= "Press..." then
+				if currentBindingConnection then currentBindingConnection:Disconnect(); currentBindingConnection = nil; end
+				return
+			end
+
+			if gameProcessedEvent then
+				button.Text = (keybinds[name] and keybinds[name].Value.Name) or "None"
+				button.BackgroundColor3 = colors.Button
+				currentlyBindingKeyFor = nil
+				if currentBindingConnection then currentBindingConnection:Disconnect(); currentBindingConnection = nil; end
+				return
+			end
+
+			local validKeyAssigned = false
+			if inputObject.UserInputType == Enum.UserInputType.Keyboard then
+				if inputObject.KeyCode == Enum.KeyCode.Escape then
+					keybinds[name] = nil
+					button.Text = "None"
+				else
+					keybinds[name] = {Type = "Keyboard", Value = inputObject.KeyCode}
+					button.Text = inputObject.KeyCode.Name
+				end
+				validKeyAssigned = true
+			elseif inputObject.UserInputType == Enum.UserInputType.MouseButton1 or inputObject.UserInputType == Enum.UserInputType.MouseButton2 or inputObject.UserInputType == Enum.UserInputType.MouseButton3 then
+				keybinds[name] = {Type = "MouseButton", Value = inputObject.UserInputType}
+				button.Text = inputObject.UserInputType.Name:gsub("MouseButton", "MB")
+				validKeyAssigned = true
+			else
+				return -- Don't do anything for other input types
+			end
+
+			if validKeyAssigned then
+				button.BackgroundColor3 = colors.Button -- Reset color after binding
+				lastBoundInputObject = inputObject
+				currentlyBindingKeyFor = nil
+				if currentBindingConnection then
+					currentBindingConnection:Disconnect()
+					currentBindingConnection = nil
+				end
+			end
+		end)
+	end)
+end
+
+-- Combat Functions
+local function predictTargetPosition(targetPart, deltaTime)
+	local velocity = targetPart.Velocity or Vector3.new()
+	return targetPart.Position + velocity * deltaTime * math.clamp(velocity.Magnitude / 50, 0.5, 2)
+end
+local function getTargetInFOV()
+	local mousePosition = UserInputService:GetMouseLocation()
+	local closestTarget, minDistance = nil, math.huge
+	if targetedPlayer and targetedPlayer.Character then
+		local part = targetedPlayer.Character:FindFirstChild(aimlockTargetPart == "Head" and "Head" or "HumanoidRootPart")
+		if part then
+			local screenPosition, onScreen = camera:WorldToViewportPoint(part.Position)
+			if onScreen and (Vector2.new(screenPosition.X, screenPosition.Y) - mousePosition).Magnitude <= aimlockFOV then return part end
+		end
+	end
+	for _, p in pairs(cachedPlayers) do
+		if p ~= player then
+			local targetCharacterPart = p.Character and p.Character:FindFirstChild(aimlockTargetPart == "Head" and "Head" or "HumanoidRootPart")
+			if targetCharacterPart then
+				local screenPosition, onScreen = camera:WorldToViewportPoint(targetCharacterPart.Position)
+				if onScreen then
+					local distance = (Vector2.new(screenPosition.X, screenPosition.Y) - mousePosition).Magnitude
+					if distance <= aimlockFOV and distance < minDistance then closestTarget, minDistance = targetCharacterPart, distance end
+				end
+			end
+		end
+	end
+	return closestTarget
+end
+
+-- ESP Functions
+local function updateESP()
+	if not espActive then
+		for p, h in pairs(espHighlights) do if h then h:Destroy() end espHighlights[p] = nil end
+		for p, n in pairs(espNames) do if n then n:Destroy() end espNames[p] = nil end
+		seenPlayers = {}
+		return
+	end
+	local currentPlayers = {}
+	for _, p in pairs(cachedPlayers) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			currentPlayers[p] = true
+			if not seenPlayers[p] then
+				local highlight = create("Highlight", {
+					FillColor = colors.ESP,
+					FillTransparency = 0.7,
+					OutlineColor = colors.ESP,
+					OutlineTransparency = 0,
+					DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+					Parent = p.Character
+				})
+				espHighlights[p] = highlight
+				local nameGui = create("BillboardGui", {
+					Size = UDim2.new(0, 100, 0, 50),
+					StudsOffset = Vector3.new(0, 3, 0),
+					Adornee = p.Character:WaitForChild("Head"),
+					AlwaysOnTop = true,
+					Parent = p.Character
+				})
+				create("TextLabel", {
+					Size = UDim2.new(1, 0, 1, 0),
+					Text = p.Name,
+					TextColor3 = colors.ESP,
+					TextSize = 14,
+					BackgroundTransparency = 1,
+					Font = Enum.Font.FredokaOne,
+					Parent = nameGui
+				})
+				espNames[p] = nameGui
+				seenPlayers[p] = true
+			end
+			if espHighlights[p] then espHighlights[p].Enabled = true; espHighlights[p].FillColor = colors.ESP; espHighlights[p].OutlineColor = colors.ESP; end
+			if espNames[p] then espNames[p].Enabled = true; if espNames[p]:FindFirstChild("TextLabel") then espNames[p].TextLabel.TextColor3 = colors.ESP end end
+		end
+	end
+	for p in pairs(seenPlayers) do
+		if not currentPlayers[p] then
+			if espHighlights[p] then espHighlights[p]:Destroy() espHighlights[p] = nil end
+			if espNames[p] then espNames[p]:Destroy() espNames[p] = nil end
+			seenPlayers[p] = nil
+		end
+	end
+end
+Players.PlayerAdded:Connect(function(p) cachedPlayers = Players:GetPlayers() if espActive then updateESP() end end)
+Players.PlayerRemoving:Connect(function(p)
+	cachedPlayers = Players:GetPlayers()
+	seenPlayers[p] = nil
+	if espHighlights[p] then espHighlights[p]:Destroy() espHighlights[p] = nil end
+	if espNames[p] then espNames[p]:Destroy() espNames[p] = nil end
+	if p == headbangTarget then stopHeadbang() end
+	if p == targetedPlayer then targetedPlayer = nil end
+end)
+
+-- Visuals Tab
+addSlider("Saturation", -1, 2, 0, 0, function(v) if v ~= colorCorrection.Saturation then colorCorrection.Saturation = v end end, visualsTab, false, false)
+addSlider("FOV", 30, 120, 70, 40, function(v) if v ~= camera.FieldOfView then camera.FieldOfView = v end end, visualsTab, false, true)
+local timeFrame = addSlider("Time", 0, 24, originalSettings.ClockTime, 80, function(v) if not timeLocked and v ~= Lighting.ClockTime then Lighting.ClockTime = v end end, visualsTab, false, false)
+local espToggleFrame, espToggleUpdateFn = addToggle("ESP", false, 120, function(on) espActive = on updateESP() end, visualsTab)
+
+local espColorBtn = create("TextButton", {Size = UDim2.new(0, 60, 0, 25), Position = UDim2.new(0.55, 0, 0, 10), BackgroundColor3 = colors.ESP, Text = "Color", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = espToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = espColorBtn})
+uiElements.espColorBtnRef = espColorBtn
+
+local function updateESPColor(newColor) -- This function is now primarily for ESP logic, not general UI
+	colors.ESP = newColor
+	if uiElements.espColorBtnRef then uiElements.espColorBtnRef.BackgroundColor3 = newColor end
+	updateESP() -- Refresh ESP visuals with the new color
+end
+
+addToggle("Infinite Zoom", false, 160, function(on) player.CameraMaxZoomDistance = on and 10000000 or originalSettings.MaxZoom end, visualsTab)
+addToggle("Wallhack", false, 200, function(on)
+	wallhackActive = on
+	if on then
+		for _, v in pairs(workspace:GetDescendants()) do
+			if v:IsA("BasePart") then
+				if not originalSettings.Transparency[v] then originalSettings.Transparency[v] = v.Transparency end
+				v.Transparency = 0.7
+			end
+		end
+	else
+		for p_part, t in pairs(originalSettings.Transparency) do if p_part and p_part.Parent then p_part.Transparency = t else originalSettings.Transparency[p_part] = nil end end
+		originalSettings.Transparency = {}
+	end
+end, visualsTab)
+addToggle("Low Texture", false, 240, function(on)
+	lowTextureActive = on
+	if on then
+		for _, v in pairs(workspace:GetDescendants()) do
+			if v:IsA("BasePart") then
+				if not originalSettings.Materials[v] then originalSettings.Materials[v] = v.Material end
+				v.Material = Enum.Material.SmoothPlastic
+			end
+		end
+	else
+		for p_part, m in pairs(originalSettings.Materials) do if p_part and p_part.Parent then p_part.Material = m else originalSettings.Materials[p_part] = nil end end
+		originalSettings.Materials = {}
+	end
+end, visualsTab)
+visualsTab.CanvasSize = UDim2.new(0, 0, 0, 290)
+
+-- Player Tab
+local speedToggleFrame, speedToggleUpdateFn = addToggle("Speed", false, 0, function(on) if not rootPart then return end if on and flyActive then for _, c in pairs(toggleCallbacks["Fly"] or {}) do c(false) end end speedActive = on end, playerTab)
+uiElements.speedValueInput = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(speedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = speedToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.speedValueInput})
+uiElements.speedValueInput.FocusLost:Connect(function(enterPressed) if enterPressed then local v = tonumber(uiElements.speedValueInput.Text) if v then speedValue = math.clamp(v, 50, 50000) uiElements.speedValueInput.Text = tostring(speedValue) end end end)
+
+local bodyVelocity, bodyGyro
+local flyToggleFrame, flyToggleUpdateFn = addToggle("Fly", false, 40, function(on)
+	if not rootPart or not humanoid then return end
+	if on and speedActive then speedToggleUpdateFn(false) end
+	flyActive = on
+	humanoid.PlatformStand = on
+	if on then
+		if bodyVelocity then bodyVelocity:Destroy() end
+		if bodyGyro then bodyGyro:Destroy() end
+		bodyVelocity = Instance.new("BodyVelocity")
+		bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bodyVelocity.Velocity = Vector3.new()
+		bodyVelocity.Parent = rootPart
+		bodyGyro = Instance.new("BodyGyro")
+		bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		bodyGyro.P = 20000
+		bodyGyro.D = 100
+		bodyGyro.Parent = rootPart
+	else
+		if bodyVelocity then bodyVelocity:Destroy() bodyVelocity = nil end
+		if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
+	end
+end, playerTab)
+uiElements.flySpeedValueInput = create("TextBox", {Size = UDim2.new(0.15, 0, 0, 20), Position = UDim2.new(0.6, 0, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(flySpeedValue), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = flyToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.flySpeedValueInput})
+uiElements.flySpeedValueInput.FocusLost:Connect(function(enterPressed) if enterPressed then local v = tonumber(uiElements.flySpeedValueInput.Text) if v then flySpeedValue = math.clamp(v, 50, 50000) uiElements.flySpeedValueInput.Text = tostring(flySpeedValue) end end end)
+
+local yPosPlayerTab = 80
+addToggle("Click Teleport", false, yPosPlayerTab, function(on) clickTeleportActive = on end, playerTab) yPosPlayerTab = yPosPlayerTab + 45
+addToggle("Infinite Jump", false, yPosPlayerTab, function(state) infiniteJumpEnabled = state end, playerTab) yPosPlayerTab = yPosPlayerTab + 45
+local headbangToggleFrame, headbangToggleUpdateFn = addToggle("Headbang", false, yPosPlayerTab, function(on)
+	headbangEnabled = on
+	if not on and isHeadbangActive then stopHeadbang() end
+end, playerTab) yPosPlayerTab = yPosPlayerTab + 45
+addToggle("Spin", false, yPosPlayerTab, function(state) spinEnabled = state end, playerTab)
+addSlider("Spin Speed", 0, 100, 5, yPosPlayerTab + 40, function(val) spinSpeed = val end, playerTab, false, true)
+yPosPlayerTab = yPosPlayerTab + 85
+
+uiElements.rejoinBtn = addActionButton("Rejoin", 10, yPosPlayerTab, function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player) end, playerTab, 120)
+uiElements.serverHopBtn = addActionButton("Server Hop", 140, yPosPlayerTab, function()
+	if httprequest then
+		local servers = {}
+		local success, result = pcall(function() return httprequest({ Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId) }) end)
+		if success and result and result.Body then
+			local bodySuccess, decodedBody = pcall(HttpService.JSONDecode, HttpService, result.Body)
+			if bodySuccess and decodedBody and decodedBody.data then
+				for _, v in next, decodedBody.data do
+					if type(v) == "table" and tonumber(v.playing) and tonumber(v.maxPlayers) and v.playing < v.maxPlayers and v.id ~= game.JobId then
+						table.insert(servers, 1, v.id)
+					end
+				end
+			end
+		end
+		if #servers > 0 then TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)], player) else notify("Server Hop", "No other servers found.", 3) end
+	else
+		notify("Server Hop", "HTTP request function not available.", 3)
+	end
+end, playerTab, 120)
+uiElements.jerkBtn = addActionButton("Jerk", 270, yPosPlayerTab, function()
+	if not character then return end
+	local isR6 = character:FindFirstChild("Torso") ~= nil
+	local scriptUrl = isR6 and "https://pastefy.app/wa3v2Vgm/raw" or "https://pastefy.app/YZoglOyJ/raw"
+	pcall(function()
+		local success_script, jerkScriptContent = pcall(game.HttpGet, game, scriptUrl, true)
+		if success_script and jerkScriptContent then
+			local jerkScript = loadstring(jerkScriptContent)
+			if jerkScript then jerkScript() end
+		else
+			notify("Jerk", "Failed to load script.", 3)
+		end
+	end)
+end, playerTab, 120)
+yPosPlayerTab = yPosPlayerTab + 45
+
+uiElements.headbangHeightOffsetInput = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 220, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(headbangHeightOffset), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.headbangHeightOffsetInput})
+uiElements.headbangHeightOffsetInput.FocusLost:Connect(function(e) if e then local v = tonumber(uiElements.headbangHeightOffsetInput.Text) if v then headbangHeightOffset = v uiElements.headbangHeightOffsetInput.Text = tostring(v) end end end)
+uiElements.headbangMinDistInput = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 280, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(minDist), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.headbangMinDistInput})
+uiElements.headbangMinDistInput.FocusLost:Connect(function(e) if e then local v = tonumber(uiElements.headbangMinDistInput.Text) if v then minDist = v uiElements.headbangMinDistInput.Text = tostring(v) end end end)
+uiElements.headbangMaxDistInput = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 340, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(maxDist), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.headbangMaxDistInput})
+uiElements.headbangMaxDistInput.FocusLost:Connect(function(e) if e then local v = tonumber(uiElements.headbangMaxDistInput.Text) if v then maxDist = v uiElements.headbangMaxDistInput.Text = tostring(v) end end end)
+uiElements.headbangSpeedInput = create("TextBox", {Size = UDim2.new(0, 50, 0, 20), Position = UDim2.new(0, 400, 0.5, -10), BackgroundColor3 = colors.Button, Text = tostring(headbangOscillationSpeed), TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = headbangToggleFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.headbangSpeedInput})
+uiElements.headbangSpeedInput.FocusLost:Connect(function(e) if e then local v = tonumber(uiElements.headbangSpeedInput.Text) if v then headbangOscillationSpeed = v uiElements.headbangSpeedInput.Text = tostring(v) end end end)
+playerTab.CanvasSize = UDim2.new(0, 0, 0, yPosPlayerTab + 0)
+RunService.RenderStepped:Connect(function() if spinEnabled and character and rootPart then rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(spinSpeed), 0) end end)
+
+-- Combat Tab
+local aimlockToggleFrame, aimlockToggleUpdateFn = addToggle("Aimlock", false, 0, function(on) aimlockActive = on if not on then lockedTarget = nil aimlockLocked = false end end, combatTab)
+uiElements.predictionButtonRef, _ = addButton("Prediction", 270, 10, function(s) predictionActive = s end, combatTab, false, 80)
+uiElements.aimlockModeButtonRef, _ = addButton("Toggle", 355, 10, function(s) aimlockToggleMode = s uiElements.aimlockModeButtonRef.Text = s and "Toggle" or "Hold" lockedTarget = nil aimlockLocked = false end, combatTab, false, 80)
+uiElements.aimlockTargetPartButtonRef, _ = addButton("Head", 185, 10, function(s) aimlockTargetPart = s and "Head" or "Torso" lockedTarget = nil end, combatTab, true, 80)
+
+local fovSliderFrame = addSlider("Aimlock FOV", 30, 320, aimlockFOV, 40, function(v)
+	aimlockFOV = v
+	if fovCone then fovCone.Size = UDim2.new(0, v * 2, 0, v * 2) fovCone.Position = UDim2.new(0.5, -v, 0.5, -v) end
+end, combatTab, false, true)
+uiElements.fovConeToggleButtonRef = create("ImageButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0, 110, 0.5, -10), BackgroundColor3 = colors.Button, Image = "rbxassetid://6023565895", ImageColor3 = colors.Text, Parent = fovSliderFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.fovConeToggleButtonRef})
+uiElements.fovConeToggleButtonRef.MouseButton1Click:Connect(function()
+	showFOVCone = not showFOVCone
+	uiElements.fovConeToggleButtonRef.BackgroundColor3 = showFOVCone and colors.ToggleOn or colors.Button
+	if not fovCone and showFOVCone then
+		fovCone = create("Frame", {Size = UDim2.new(0, aimlockFOV * 2, 0, aimlockFOV * 2), Position = UDim2.new(0.5, -aimlockFOV, 0.5, -aimlockFOV), BackgroundTransparency = 0.7, BackgroundColor3 = colors.Outline, BorderSizePixel = 0, Parent = gui})
+		create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = fovCone})
+	elseif fovCone and not showFOVCone then fovCone:Destroy() fovCone = nil end
+	if fovCone then fovCone.Visible = showFOVCone end
+end)
+combatTab.CanvasSize = UDim2.new(0, 0, 0, 90)
+
+-- Target Tab
+local targetInputFrame = create("Frame", {Size = UDim2.new(1, 0, 0, 40), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1, Parent = targetTab})
+uiElements.targetInputRef = create("TextBox", {Size = UDim2.new(0.7, 0, 1, 0), Position = UDim2.new(0, 5, 0, 0), BackgroundColor3 = colors.Button, Text = "", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, PlaceholderText = "Enter player name", ClearTextOnFocus = false, Parent = targetInputFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.targetInputRef})
+uiElements.clickTargetBtnRef = create("ImageButton", {Size = UDim2.new(0, 30, 0, 30), Position = UDim2.new(0.75, 0, 0, 5), BackgroundTransparency = 1, Image = "rbxassetid://2716591855", Parent = targetInputFrame})
+local targetImage = create("ImageLabel", {Size = UDim2.new(0, 100, 0, 100), Position = UDim2.new(0, 10, 0, 50), BackgroundColor3 = colors.Background, Image = "rbxassetid://10818605405", Parent = targetTab})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = targetImage})
+local userInfoLabel = create("TextLabel", {Size = UDim2.new(0, 200, 0, 75), Position = UDim2.new(0, 120, 0, 50), BackgroundTransparency = 1, Text = "UserID: \nDisplay: \nJoined: ", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = targetTab})
+
+local function updateTargetDisplay(targetPlayerInstance)
+	if targetPlayerInstance then
+		targetedPlayer = targetPlayerInstance
+		uiElements.targetInputRef.Text = targetPlayerInstance.Name
+		pcall(function() targetImage.Image = Players:GetUserThumbnailAsync(targetPlayerInstance.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420) end)
+		userInfoLabel.Text = ("UserID: %d\nDisplay: %s\nJoined: %s"):format(
+			targetPlayerInstance.UserId,
+			targetPlayerInstance.DisplayName,
+			os.date("%d-%m-%Y", os.time() - targetPlayerInstance.AccountAge * 24 * 3600)
+		)
+	else
+		targetedPlayer = nil
+		uiElements.targetInputRef.Text = ""
+		targetImage.Image = "rbxassetid://10818605405"
+		userInfoLabel.Text = "UserID: \nDisplay: \nJoined: "
+	end
+end
+
+uiElements.viewButtonRef, _ = addButton("View", 10, 160, function(s)
+	viewActive = s
+	if s then
+		if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("Humanoid") then
+			camera.CameraSubject = targetedPlayer.Character.Humanoid
+		else
+			notify("Zangetsu", "No target selected.", 5)
+			buttonCallbacks["View"][1](false) -- Call the first callback to update state
+		end
+	else
+		if character and character.Humanoid then camera.CameraSubject = character.Humanoid end
+		camera.CameraType = Enum.CameraType.Custom
+	end
+end, targetTab, false, 120)
+uiElements.tpToTargetBtn = addActionButton("Teleport", 140, 160, function()
+	if targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
+		if rootPart then rootPart.CFrame = targetedPlayer.Character.HumanoidRootPart.CFrame + Vector3.new(0, 3, 0) end
+	else
+		notify("Zangetsu", "No target selected.", 5)
+	end
+end, targetTab, 120)
+
+uiElements.headsitButtonRef, _ = addButton("Headsit", 10, 210, function(s)
+	headsitActive = s
+	if s then
+		if targetedPlayer and rootPart and humanoid then
+			lastPos = rootPart.Position
+			task.spawn(function()
+				while headsitActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("Head") and rootPart and humanoid do
+					humanoid.Sit = true
+					local targetHead = targetedPlayer.Character.Head
+					local targetPos = targetHead.CFrame * CFrame.new(0, 2, 0)
+					if predictionActive and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") then
+						local vel = targetedPlayer.Character.HumanoidRootPart.Velocity
+						local ping = (Stats.Network.ServerStatsItem["Data Ping"]:GetValue() or 0) / 1000
+						targetPos = targetPos + vel * ping
+					end
+					rootPart.CFrame = targetPos
+					rootPart.Velocity = Vector3.new(0, 0, 0)
+					task.wait()
+				end
+				humanoid.Sit = false
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				headsitActive = false
+				if buttonCallbacks["Headsit"] then buttonCallbacks["Headsit"][1](false) end
+			end)
+		else
+			notify("Zangetsu", "No target selected.", 5)
+			if buttonCallbacks["Headsit"] then buttonCallbacks["Headsit"][1](false) end
+		end
+	else
+		headsitActive = false
+		if humanoid then humanoid.Sit = false end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+	end
+end, targetTab, false, 120)
+
+uiElements.backpackButtonRef, _ = addButton("Backpack", 140, 210, function(s)
+	backpackActive = s
+	if s then
+		if targetedPlayer and rootPart and humanoid then
+			lastPos = rootPart.Position
+			task.spawn(function()
+				while backpackActive and targetedPlayer and targetedPlayer.Character and targetedPlayer.Character:FindFirstChild("HumanoidRootPart") and rootPart and humanoid do
+					humanoid.Sit = true
+					local targetRoot = targetedPlayer.Character.HumanoidRootPart
+					local targetPos = targetRoot.CFrame * CFrame.new(0, 0, 1.2) * CFrame.Angles(0, -3, 0)
+					if predictionActive then
+						local vel = targetRoot.Velocity
+						local ping = (Stats.Network.ServerStatsItem["Data Ping"]:GetValue() or 0) / 1000
+						targetPos = targetPos + vel * ping
+					end
+					rootPart.CFrame = targetPos
+					rootPart.Velocity = Vector3.new(0, 0, 0)
+					task.wait()
+				end
+				humanoid.Sit = false
+				if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+				backpackActive = false
+				if buttonCallbacks["Backpack"] then buttonCallbacks["Backpack"][1](false) end
+			end)
+		else
+			notify("Zangetsu", "No target selected.", 5)
+			if buttonCallbacks["Backpack"] then buttonCallbacks["Backpack"][1](false) end
+		end
+	else
+		backpackActive = false
+		if humanoid then humanoid.Sit = false end
+		if rootPart and lastPos then rootPart.CFrame = CFrame.new(lastPos) end
+	end
+end, targetTab, false, 120)
+
+uiElements.findNearestBtn = addActionButton("Find Nearest", 10, 260, function()
+	local nearest = findNearestPlayer()
+	if nearest then updateTargetDisplay(nearest) end
+end, targetTab, 120)
+uiElements.randomTargetBtn = addActionButton("Random Target", 140, 260, function()
+	local allPlayers = cachedPlayers
+	if #allPlayers > 1 then
+		local randomPlayer
+		repeat randomPlayer = allPlayers[math.random(1, #allPlayers)] until randomPlayer ~= player
+		updateTargetDisplay(randomPlayer)
+	end
+end, targetTab, 120)
+
+uiElements.targetInputRef.FocusLost:Connect(function(enterPressed)
+	if not enterPressed then return end
+	local inputText = uiElements.targetInputRef.Text:lower()
+	if inputText ~= "" then
+		local foundPlayer = nil
+		for _, p in pairs(cachedPlayers) do
+			if p.Name:lower():sub(1, #inputText) == inputText or p.DisplayName:lower():sub(1, #inputText) == inputText then
+				foundPlayer = p
+				break
+			end
+		end
+		updateTargetDisplay(foundPlayer)
+	else
+		updateTargetDisplay(nil)
+	end
+end)
+uiElements.clickTargetBtnRef.MouseButton1Click:Connect(function()
+	local GetTargetTool = Instance.new("Tool")
+	GetTargetTool.Name = "ClickTarget"
+	GetTargetTool.RequiresHandle = false
+	GetTargetTool.TextureId = "rbxassetid://2716591855"
+	GetTargetTool.ToolTip = "Select Target"
+	GetTargetTool.Activated:Connect(function()
+		local mouse = player:GetMouse()
+		local hit = mouse.Target
+		local person = nil
+		if hit and hit.Parent then
+			person = Players:GetPlayerFromCharacter(hit.Parent)
+			if not person and hit.Parent:IsA("Accessory") then person = Players:GetPlayerFromCharacter(hit.Parent.Parent) end
+		end
+		if person then updateTargetDisplay(person) end
+		GetTargetTool:Destroy()
+	end)
+	GetTargetTool.Parent = player.Backpack
+	if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+		player.Character.Humanoid:EquipTool(GetTargetTool)
+	else
+		GetTargetTool:Destroy()
+	end
+end)
+targetTab.CanvasSize = UDim2.new(0, 0, 0, 300)
+
+-- Animations Tab
+local loadingType = nil
+local customAnimTextBoxes = {}
+local individualLoadButtons = {}
+local loadAllToggle = false
+local animPacks = {
+	{Name = "Vampire", Idle = "1083445855", Swim = "1083450166", Walk = "1083473930", Run = "1083462077", Jump = "1083455352", Climb = "1083439238", Fall = "1083443587"},
+	{Name = "Hero", Idle = "616111295", Swim = "616113536", Walk = "616122287", Run = "616117076", Jump = "616115533", Climb = "616104706", Fall = "616108001"},
+	{Name = "Zombie Classic", Idle = "616158929", Swim = "616160636", Walk = "616168032", Run = "616163682", Jump = "616161997", Climb = "616156119", Fall = "616157476"},
+	{Name = "Mage", Idle = "707742142", Swim = "707855907", Walk = "707897309", Run = "707861613", Jump = "707853694", Climb = "707826056", Fall = "707829716"},
+	{Name = "Ghost", Idle = "616006778", Swim = "616008087", Walk = "616013216", Run = "616010382", Jump = "616008936", Climb = "616003713", Fall = "616005863"},
+	{Name = "Elder", Idle = "845397899", Swim = "845400520", Walk = "845403856", Run = "845386501", Jump = "845398858", Climb = "845392038", Fall = "845396048"},
+	{Name = "Astronaut", Idle = "891621366", Swim = "891633237", Walk = "891667138", Run = "891636393", Jump = "891627522", Climb = "891609353", Fall = "891617961"},
+	{Name = "Ninja", Idle = "656117400", Swim = "656118341", Walk = "656121766", Run = "656118852", Jump = "656117878", Climb = "656114359", Fall = "656115606"},
+	{Name = "Werewolf", Idle = "1083195517", Swim = "1083214717", Walk = "1083178339", Run = "1083216690", Jump = "1083218792", Climb = "1083182000", Fall = "1083189019"},
+	{Name = "Cartoon", Idle = "742637544", Swim = "742638445", Walk = "742640026", Run = "742638842", Jump = "742637942", Climb = "742636889", Fall = "742637151"},
+	{Name = "Pirate", Idle = "750781874", Swim = "750782770", Walk = "750785693", Run = "750783738", Jump = "750782230", Climb = "750779899", Fall = "750780242"},
+	{Name = "Sneaky", Idle = "1132473842", Swim = "1132477671", Walk = "1132510133", Run = "1132494274", Jump = "1132489853", Climb = "1132461372", Fall = "1132469004"},
+	{Name = "Toy", Idle = "782841498", Swim = "782845736", Walk = "782843345", Run = "782842708", Jump = "782847020", Climb = "782843869", Fall = "782846423"},
+	{Name = "Knight", Idle = "657595757", Swim = "657568135", Walk = "657552124", Run = "657564596", Jump = "658409194", Climb = "658360781", Fall = "657600338"},
+	{Name = "Confident", Idle = "1069977950", Swim = "1069987858", Walk = "1070017263", Run = "1070001516", Jump = "1069984524", Climb = "1069946257", Fall = "1069973677"},
+	{Name = "Popstar", Idle = "1212900985", Swim = "1212900985", Walk = "1212980338", Run = "1212980348", Jump = "1212954642", Climb = "1213044953", Fall = "1212900995"},
+	{Name = "Princess", Idle = "941003647", Swim = "941013098", Walk = "941028902", Run = "941015281", Jump = "941008832", Climb = "940996062", Fall = "941000007"},
+	{Name = "Cowboy", Idle = "1014390418", Swim = "1014398616", Walk = "1014421541", Run = "1014401683", Jump = "1014394726", Climb = "1014380606", Fall = "1014384571"},
+	{Name = "Patrol", Idle = "1149612882", Swim = "1150842221", Walk = "1151231493", Run = "1150967949", Jump = "1150944216", Climb = "1148811837", Fall = "1148863382"},
+	{Name = "FE Zombie", Idle = "3489171152", Swim = "3489171152", Walk = "3489174223", Run = "3489173414", Jump = "616161997", Climb = "616156119", Fall = "616157476"},
+	{Name = "Stylized Female", Idle = "4708192150", Swim = "4708191566", Walk = "4708193840", Run = "4708192705", Jump = "4708188025", Climb = "4708184253", Fall = "4708186162"},
+	{Name = "Oldschool", Idle = "5319828216", Swim = "5319831086", Walk = "5319847204", Run = "5319844329", Jump = "5319841935", Climb = "5319816685", Fall = "5319839762"},
+	{Name = "Rthro", Idle = "2510196951", Swim = "2510197257", Walk = "2510202577", Run = "2510198475", Jump = "2510197830", Climb = "2510192778", Fall = "2510195892"},
+	{Name = "Wicked", Idle = "118832222982049", Swim = "76049494037641", Walk = "92072849924640", Run = "72301599441680", Jump = "104325245285198", Climb = "131326830509784", Fall = "121152442762481"},
+	{Name = "Stylish", Idle = "616136790", Swim = "616138447", Walk = "616146177", Run = "616140816", Jump = "616139451", Climb = "616133594", Fall = "616134815"},
+	{Name = "adidas", Idle = "18537376492", Swim = "18537371272", Walk = "18537392113", Run = "18537384940", Jump = "18537380791", Climb = "18537363391", Fall = "18537367238"},
+	{Name = "Robot", Idle = "616088211", Swim = "616089559", Walk = "616095330", Run = "616091570", Jump = "616090535", Climb = "616086039", Fall = "616087089"},
+	{Name = "Bold", Idle = "16738333868", Swim = "16738334710", Walk = "16738340646", Run = "16738337225", Jump = "16738336650", Climb = "16738332169", Fall = "16738333171"},
+	{Name = "Catwalk", Idle = "133806214992291", Swim = "94970088341563", Walk = "109168724482748", Run = "81024476153754", Jump = "116936326516985", Climb = "119377220967554", Fall = "92294537340807"},
+	{Name = "Bubbly", Idle = "910004836", Swim = "910009958", Walk = "910034870", Run = "910025107", Jump = "910016857", Climb = "909997997", Fall = "910001910"},
+	{Name = "No Boundaries", Idle = "18747067405", Swim = "18747063918", Walk = "18747074203", Run = "18747070484", Jump = "18747069148", Climb = "18747060903", Fall = "18747062535"},
+	{Name = "NFL", Idle = "92080889861410", Swim = "74451233229259", Walk = "110358958299415", Run = "117333533048078", Jump = "119846112151352", Climb = "134630013742019", Fall = "129773241321032"},
+	{Name = "R15", Idle = "4211217646", Swim = "4211218409", Walk = "4211223236", Run = "4211220381", Jump = "4211219390", Climb = "4211214992", Fall = "4211216152"},
+	{Name = "Ghost 2", Idle = "1151221899", Swim = "1151221899", Walk = "1151221899", Run = "1151221899", Jump = "1151221899", Climb = "0", Fall = "1151221899"},
+	{Name = "Udzal", Idle = "3303162274", Swim = "3303162549", Walk = "3303162967", Run = "3236836670", Jump = "2510197830", Climb = "2510192778", Fall = "2510195892"},
+	{Name = "Oinan Thickhoof", Idle = "657595757", Swim = "657568135", Walk = "2510202577", Run = "3236836670", Jump = "2510197830", Climb = "2510192778", Fall = "2510195892"},
+	{Name = "Borock", Idle = "3293641938", Swim = "3293642554", Walk = "2510202577", Run = "3236836670", Jump = "2510197830", Climb = "2510192778", Fall = "2510195892"},
+	{Name = "Blocky Mech", Idle = "4417977954", Swim = "4417978624", Walk = "2510202577", Run = "4417979645", Jump = "2510197830", Climb = "2510192778", Fall = "2510195892"},
+	{Name = "Goofy", Idle = "18537387180", Swim = "18537387180", Walk = "18537367238", Run = "18537367238", Jump = "18537367238", Climb = "18537367238", Fall = "18537367238"}
+}
+
+local function _applyAnimationSet(getIdFunc)
+	pcall(function()
+		if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("Animate") then return end
+		local Animate = character.Animate
+		Animate.Disabled = true
+		StopAnim()
+		local function setAnimInstanceId(folderName, animInstanceName, idKey, fallbackClassName)
+			local id = getIdFunc(idKey)
+			if not id or id == "" or not tonumber(id) then return end
+			local animFolder = Animate:FindFirstChild(folderName)
+			if animFolder then
+				local animInstance = animFolder:FindFirstChild(animInstanceName)
+				if not animInstance and fallbackClassName then
+					animInstance = animFolder:FindFirstChildOfClass(fallbackClassName)
+				end
+				if animInstance and animInstance:IsA("Animation") then
+					animInstance.AnimationId = "rbxassetid://" .. id
+				end
+			end
+		end
+		setAnimInstanceId("idle", "Animation1", "Idle")
+		setAnimInstanceId("idle", "Animation2", "Idle")
+		setAnimInstanceId("walk", "WalkAnim", "Walk")
+		setAnimInstanceId("run", "RunAnim", "Run")
+		setAnimInstanceId("jump", "JumpAnim", "Jump")
+		setAnimInstanceId("fall", "FallAnim", "Fall")
+		setAnimInstanceId("climb", "ClimbAnim", "Climb")
+		setAnimInstanceId("swim", "SwimAnim", "Swim", "Animation")
+		Animate.Disabled = false
+	end)
+end
+
+local function applyAnimationPack(packData)
+	_applyAnimationSet(function(animType) return packData[animType] end)
+end
+
+local function applyCustomAnimationsFromTextBoxes()
+	_applyAnimationSet(function(animType) return customAnimTextBoxes[animType] and customAnimTextBoxes[animType].Text end)
+end
+
+local currentAnimationsYOffset = 0
+
+local function createAnimationsGrid(animationPacks, parentElement)
+	local perRow = 5
+	local spacing = 10
+	local btnWidth = (parentElement.AbsoluteSize.X - (perRow + 1) * spacing) / perRow
+	if btnWidth <= 0 then btnWidth = 80 elseif btnWidth > 100 then btnWidth = 100 end
+	local btnHeight = 23
+	local rowHeight = btnHeight + spacing
+
+	for i, animData in ipairs(animationPacks) do
+		local row = math.floor((i - 1) / perRow)
+		local col = (i - 1) % perRow
+		local btn = create("TextButton", {
+			Size = UDim2.new(0, btnWidth, 0, btnHeight),
+			Position = UDim2.new(0, spacing + col * (btnWidth + spacing), 0, spacing + row * rowHeight),
+			BackgroundColor3 = colors.Button,
+			Text = animData.Name,
+			TextColor3 = colors.Text,
+			TextSize = 14.5,
+			Font = Enum.Font.FredokaOne,
+			Parent = parentElement
+		})
+		create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
+		btn.MouseButton1Click:Connect(function()
+			if loadAllToggle then
+				customAnimTextBoxes["Idle"].Text = animData.Idle or ""
+				customAnimTextBoxes["Walk"].Text = animData.Walk or ""
+				customAnimTextBoxes["Run"].Text = animData.Run or ""
+				customAnimTextBoxes["Jump"].Text = animData.Jump or ""
+				customAnimTextBoxes["Fall"].Text = animData.Fall or ""
+				customAnimTextBoxes["Climb"].Text = animData.Climb or ""
+				customAnimTextBoxes["Swim"].Text = animData.Swim or ""
+			elseif loadingType then
+				customAnimTextBoxes[loadingType].Text = animData[loadingType] or ""
+				loadingType = nil
+				for _, loadButton in pairs(individualLoadButtons) do loadButton.Text = "Select"; loadButton.BackgroundColor3 = colors.Button; end
+			else
+				applyAnimationPack(animData)
+			end
+		end)
+	end
+	local numRows = math.ceil(#animationPacks / perRow)
+	currentAnimationsYOffset = spacing + numRows * rowHeight + spacing
+end
+
+createAnimationsGrid(animPacks, animationsTab)
+
+local customAnimHeader = create("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 30),
+	Position = UDim2.new(0, 10, 0, currentAnimationsYOffset),
+	BackgroundTransparency = 1, Text = "Custom Animation Controls", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = animationsTab
+})
+currentAnimationsYOffset = currentAnimationsYOffset + 30 + 10
+
+local animTypes = {"Idle", "Run", "Walk", "Jump", "Fall", "Swim", "Climb"}
+for i, animType in ipairs(animTypes) do
+	local yPos = currentAnimationsYOffset + (i - 1) * 40
+	create("TextLabel", {Size = UDim2.new(0, 100, 0, 30), Position = UDim2.new(0, 10, 0, yPos), BackgroundTransparency = 1, Text = animType .. ":", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = animationsTab})
+	local textBox = create("TextBox", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 120, 0, yPos), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "ID", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = textBox})
+	customAnimTextBoxes[animType] = textBox
+	uiElements.customAnimTextBoxesRefs[animType] = textBox -- Store ref
+	local loadButton = create("TextButton", {Size = UDim2.new(0, 50, 0, 30), Position = UDim2.new(0, 280, 0, yPos), BackgroundColor3 = colors.Button, Text = "Select", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = loadButton})
+	loadButton.MouseButton1Click:Connect(function()
+		if loadingType == animType then
+			loadingType = nil
+			loadButton.Text = "Select"
+			loadButton.BackgroundColor3 = colors.Button
+		else
+			for _, btn_pack in pairs(individualLoadButtons) do btn_pack.Text = "Select"; btn_pack.BackgroundColor3 = colors.Button; end
+			loadingType = animType
+			loadButton.Text = "..."
+			loadButton.BackgroundColor3 = colors.Interface
+		end
+	end)
+	individualLoadButtons[animType] = loadButton
+end
+currentAnimationsYOffset = currentAnimationsYOffset + #animTypes * 40 + 10
+
+uiElements.applyCustomAnimsBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 10, 0, currentAnimationsYOffset), BackgroundColor3 = colors.Interface, Text = "Apply Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.applyCustomAnimsBtn})
+uiElements.resetAnimsBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 140, 0, currentAnimationsYOffset), BackgroundColor3 = colors.Button, Text = "Reset Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.resetAnimsBtn})
+uiElements.loadAnimationBtn = create("TextButton", {Size = UDim2.new(0, 120, 0, 25), Position = UDim2.new(0, 270, 0, currentAnimationsYOffset), BackgroundColor3 = colors.Button, Text = "Load Animation", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = animationsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.loadAnimationBtn})
+uiElements.loadAnimationBtn.MouseButton1Click:Connect(function()
+	loadAllToggle = not loadAllToggle
+	uiElements.loadAnimationBtn.Text = loadAllToggle and "Select Animation" or "Load Animation"
+	uiElements.loadAnimationBtn.BackgroundColor3 = loadAllToggle and colors.Interface or colors.Button
+end)
+currentAnimationsYOffset = currentAnimationsYOffset + 25 + 10
+
+local animSpeedToggleFrame, animSpeedToggleUpdateFn = addToggle("Custom Speed", false, currentAnimationsYOffset, function(on) customAnimSpeedEnabled = on end, animationsTab)
+currentAnimationsYOffset = currentAnimationsYOffset + 40
+local animSpeedSlider = addSlider("Animation Speed", 0, 25, 1, currentAnimationsYOffset, function(v) animationSpeedMultiplier = v end, animationsTab, false, false)
+currentAnimationsYOffset = currentAnimationsYOffset + 40 + 10
+
+local function emoteScript() pcall(function() loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Gi7331/scripts/main/Emote.lua"))() end) end
+uiElements.emoteBtn = addActionButton("Emote", 10, currentAnimationsYOffset, function()
+	notify("Zangetsu", "Open with ,", 5)
+	emoteScript()
+end, animationsTab, 120)
+currentAnimationsYOffset = currentAnimationsYOffset + 25 + 10
+
+function resetAnimations()
+	pcall(function()
+		if not character or not character:FindFirstChild("Humanoid") or not character:FindFirstChild("Animate") then return end
+		local Animate = character.Animate
+		Animate.Disabled = true
+		StopAnim()
+		local function setAnim(folderName, animName, defaultIdKey, fallbackClassName)
+			local defaultId = defaultAnimations[defaultIdKey]
+			if not defaultId then return end
+			local folder = Animate:FindFirstChild(folderName)
+			if folder then
+				local animInstance = folder:FindFirstChild(animName)
+				if not animInstance and fallbackClassName then
+					animInstance = folder:FindFirstChildOfClass(fallbackClassName)
+				end
+				if animInstance and animInstance:IsA("Animation") then
+					animInstance.AnimationId = defaultId
+				end
+			end
+		end
+		setAnim("idle", "Animation1", "Idle")
+		setAnim("idle", "Animation2", "Idle")
+		setAnim("walk", "WalkAnim", "Walk")
+		setAnim("run", "RunAnim", "Run")
+		setAnim("jump", "JumpAnim", "Jump")
+		setAnim("fall", "FallAnim", "Fall")
+		setAnim("climb", "ClimbAnim", "Climb")
+		setAnim("swim", "SwimAnim", "Swim", "Animation")
+		Animate.Disabled = false
+	end)
+end
+
+uiElements.applyCustomAnimsBtn.MouseButton1Click:Connect(applyCustomAnimationsFromTextBoxes)
+uiElements.resetAnimsBtn.MouseButton1Click:Connect(resetAnimations)
+animationsTab.CanvasSize = UDim2.new(0, 0, 0, currentAnimationsYOffset)
+
+-- Keybinds ScrollFrame Content
+addKeybind("Menu", keybinds.Menu, 0)
+addKeybind("Aimlock", keybinds.Aimlock, 30)
+addKeybind("ESP", keybinds.ESP, 60)
+addKeybind("ClickTeleport", keybinds.ClickTeleport, 90)
+addKeybind("Fly", keybinds.Fly, 120)
+addKeybind("Speed", keybinds.Speed, 150)
+addKeybind("Headbang", nil, 180)
+keybindsScroll.CanvasSize = UDim2.new(0,0,0,210)
+
+-- Configuration Functions
+function serializeConfig()
+	local kb = {}
+	for name, bind in pairs(keybinds) do
+		kb[name] = bind and {Type = bind.Type, Value = bind.Value.Name}
+	end
+	local anims = {}
+	for animType, tb in pairs(customAnimTextBoxes) do anims[animType] = tb.Text end
+	return HttpService:JSONEncode({
+		keybinds = kb,
+		animations = anims,
+		visuals = {
+			ESPColor = {R = colors.ESP.R * 255, G = colors.ESP.G * 255, B = colors.ESP.B * 255},
+			Saturation = sliderValues["Saturation"],
+			FOV = sliderValues["FOV"],
+			InfiniteZoom = toggleStates["Infinite Zoom"]
+		},
+		player = {
+			ClickTeleport = toggleStates["Click Teleport"],
+			SpeedValue = speedValue,
+			FlySpeedValue = flySpeedValue,
+			HeadbangMinDist = minDist,
+			HeadbangMaxDist = maxDist,
+			HeadbangSpeed = headbangOscillationSpeed,
+			HeadbangHeightOffset = headbangHeightOffset
+		},
+		ui = {
+			Transparency = sliderValues["Transparency"],
+			MasterBackground = {R = masterColors.Background.R * 255, G = masterColors.Background.G * 255, B = masterColors.Background.B * 255},
+			MasterAccent = {R = masterColors.Accent.R * 255, G = masterColors.Accent.G * 255, B = masterColors.Accent.B * 255},
+			MasterInterface = {R = masterColors.Interface.R * 255, G = masterColors.Interface.G * 255, B = masterColors.Interface.B * 255}
+		},
+		animation = {CustomSpeedEnabled = customAnimSpeedEnabled, SpeedMultiplier = animationSpeedMultiplier}
+	})
+end
+
+local function updateGlobalColors() -- Forward declaration
+	-- Implementation later
+end
+
+function applyConfig(jsonStr)
+	local success, config = pcall(HttpService.JSONDecode, HttpService, jsonStr)
+	if not success or not config then return end
+
+	if config.keybinds then
+		for name in pairs(keybinds) do keybinds[name] = nil if keybindButtons[name] then keybindButtons[name].Text = "None" end end
+		for name, kb in pairs(config.keybinds) do
+			if kb and kb.Type and kb.Value then
+				local value = kb.Type == "Keyboard" and Enum.KeyCode[kb.Value] or Enum.UserInputType[kb.Value:gsub("MB","MouseButton")]
+				if value then keybinds[name] = {Type = kb.Type, Value = value} if keybindButtons[name] then keybindButtons[name].Text = kb.Value end end
+			end
+		end
+	end
+	if config.animations then for animType, id in pairs(config.animations) do if customAnimTextBoxes[animType] then customAnimTextBoxes[animType].Text = id or "" end end end
+	if config.visuals then
+		if config.visuals.ESPColor then colors.ESP = Color3.fromRGB(config.visuals.ESPColor.R, config.visuals.ESPColor.G, config.visuals.ESPColor.B) updateESPColor(colors.ESP) end
+		if config.visuals.Saturation and sliderCallbacks["Saturation"] then sliderCallbacks["Saturation"][1](config.visuals.Saturation) end
+		if config.visuals.FOV and sliderCallbacks["FOV"] then sliderCallbacks["FOV"][1](config.visuals.FOV) end
+		if config.visuals.InfiniteZoom ~= nil and toggleCallbacks["Infinite Zoom"] then toggleCallbacks["Infinite Zoom"][1](config.visuals.InfiniteZoom) end
+	end
+	if config.player then
+		if config.player.ClickTeleport ~= nil and toggleCallbacks["Click Teleport"] then toggleCallbacks["Click Teleport"][1](config.player.ClickTeleport) end
+		speedValue = config.player.SpeedValue or speedValue
+		flySpeedValue = config.player.FlySpeedValue or flySpeedValue
+		minDist = config.player.HeadbangMinDist or minDist
+		maxDist = config.player.HeadbangMaxDist or maxDist
+		headbangOscillationSpeed = config.player.HeadbangSpeed or headbangOscillationSpeed
+		headbangHeightOffset = config.player.HeadbangHeightOffset or headbangHeightOffset
+		if uiElements.speedValueInput then uiElements.speedValueInput.Text = tostring(speedValue) end
+		if uiElements.flySpeedValueInput then uiElements.flySpeedValueInput.Text = tostring(flySpeedValue) end
+		if uiElements.headbangMinDistInput then uiElements.headbangMinDistInput.Text = tostring(minDist) end
+		if uiElements.headbangMaxDistInput then uiElements.headbangMaxDistInput.Text = tostring(maxDist) end
+		if uiElements.headbangSpeedInput then uiElements.headbangSpeedInput.Text = tostring(headbangOscillationSpeed) end
+		if uiElements.headbangHeightOffsetInput then uiElements.headbangHeightOffsetInput.Text = tostring(headbangHeightOffset) end
+	end
+	if config.ui then
+		if config.ui.Transparency ~= nil and sliderCallbacks["Transparency"] then sliderCallbacks["Transparency"][1](config.ui.Transparency) end
+		if config.ui.MasterBackground then masterColors.Background = Color3.fromRGB(config.ui.MasterBackground.R, config.ui.MasterBackground.G, config.ui.MasterBackground.B) end
+		if config.ui.MasterAccent then masterColors.Accent = Color3.fromRGB(config.ui.MasterAccent.R, config.ui.MasterAccent.G, config.ui.MasterAccent.B) end
+		if config.ui.MasterInterface then masterColors.Interface = Color3.fromRGB(config.ui.MasterInterface.R, config.ui.MasterInterface.G, config.ui.MasterInterface.B) end
+		updateGlobalColors()
+	end
+	if config.animation then
+		if config.animation.CustomSpeedEnabled ~= nil and toggleCallbacks["Custom Speed"] then toggleCallbacks["Custom Speed"][1](config.animation.CustomSpeedEnabled) end
+		if config.animation.SpeedMultiplier ~= nil and sliderCallbacks["Animation Speed"] then sliderCallbacks["Animation Speed"][1](config.animation.SpeedMultiplier) end
+	end
+end
+
+-- Settings Tab
+local currentSettingsYOffset = 10
+
+create("TextLabel", {Size = UDim2.new(1, -20, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundTransparency = 1, Text = "Configuration", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 10
+
+uiElements.configNameBox = create("TextBox", {Size = UDim2.new(0.7, 0, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "", PlaceholderText = "Config name", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.configNameBox})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 10
+
+uiElements.configListFrame = create("ScrollingFrame", {
+	Size = UDim2.new(0.7, 0, 0, 120),
+	Position = UDim2.new(0, 10, 0, currentSettingsYOffset),
+	BackgroundColor3 = Color3.fromRGB(25, 25, 25), -- Fixed dark background
+	BorderSizePixel = 1,
+	BorderColor3 = Color3.fromRGB(50,50,50),
+	CanvasSize = UDim2.new(0, 0, 0, 0),
+	ScrollBarThickness = 4,
+	Parent = settingsTab
+})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = uiElements.configListFrame})
+create("UIListLayout", {Padding = UDim.new(0, 5), Parent = uiElements.configListFrame})
+currentSettingsYOffset = currentSettingsYOffset + 120 + 10
+
+local selectedConfig, autoloadConfig
+local configButtons = {}
+
+uiElements.createConfigBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Create config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.createConfigBtn})
+uiElements.loadConfigBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Load config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.loadConfigBtn})
+uiElements.overwriteConfigBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Overwrite config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.overwriteConfigBtn})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 10
+
+uiElements.deleteConfigBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Delete config", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.deleteConfigBtn})
+uiElements.unsetAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 170, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Unset Autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.unsetAutoloadBtn})
+uiElements.setAutoloadBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 330, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Set as autoload", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.setAutoloadBtn})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 10
+
+uiElements.resetToDefaultsBtn = create("TextButton", {Size = UDim2.new(0, 150, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundColor3 = colors.Button, Text = "Reset to defaults", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, Parent = settingsTab})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.resetToDefaultsBtn})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 10
+
+
+autoloadLabel = create("TextLabel", {Size = UDim2.new(1, -20, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundTransparency = 1, Text = "Current autoload config: none", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 20
+
+create("TextLabel", {Size = UDim2.new(1, -20, 0, 30), Position = UDim2.new(0, 10, 0, currentSettingsYOffset), BackgroundTransparency = 1, Text = "UI Settings", TextColor3 = colors.Text, TextSize = 18, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = settingsTab})
+currentSettingsYOffset = currentSettingsYOffset + 30 + 10
+
+addSlider("Transparency", 0, 1, menuTransparency, currentSettingsYOffset, function(v)
+	menuTransparency = v
+	if uiElements.mainFrame then uiElements.mainFrame.BackgroundTransparency = v end
+	if uiElements.keybindsFrame then uiElements.keybindsFrame.BackgroundTransparency = v end
+end, settingsTab, false, false)
+currentSettingsYOffset = currentSettingsYOffset + 40 + 10
+
+local function openColorPicker(targetKey) -- Forward declaration
+	-- Implementation later
+end
+
+uiElements.bgColorPickerButton = addActionButton("Background Color", 10, currentSettingsYOffset, function() openColorPicker("UI_Background") end, settingsTab, 150)
+uiElements.accentColorPickerButton = addActionButton("Accent Color", 170, currentSettingsYOffset, function() openColorPicker("UI_Accent") end, settingsTab, 150)
+uiElements.interfaceColorPickerButton = addActionButton("Interface Color", 330, currentSettingsYOffset, function() openColorPicker("UI_Interface") end, settingsTab, 150)
+currentSettingsYOffset = currentSettingsYOffset + 30 + 20
+
+
+settingsTab.CanvasSize = UDim2.new(0, 0, 0, currentSettingsYOffset)
+
+
+local function refreshConfigList()
+	for _, child in pairs(uiElements.configListFrame:GetChildren()) do if not child:IsA("UIListLayout") then child:Destroy() end end
+	configButtons = {}
+	local files = listfiles("ZangetsuConfig") or {}
+	local y = 0
+	local autoloadFileContent = isfile("ZangetsuConfig/autoload.txt") and readfile("ZangetsuConfig/autoload.txt") or nil
+	autoloadConfig = autoloadFileContent
+	if autoloadConfig then autoloadLabel.Text = "Current autoload config: " .. autoloadConfig else autoloadLabel.Text = "Current autoload config: none" end
+
+	for _, file in pairs(files) do
+		local name = file:match("ZangetsuConfig/(.-)%.json$") or file:match("^(.-)%.json$")
+		if name then
+			local btn = create("TextButton", {Size = UDim2.new(1, -40, 0, 30), BackgroundColor3 = selectedConfig == name and colors.TabSelected or colors.Button, Text = name, TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Left, Parent = uiElements.configListFrame})
+			create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = btn})
+			btn.MouseButton1Click:Connect(function()
+				selectedConfig = name
+				for _, b in pairs(configButtons) do b.BackgroundColor3 = b.Text == selectedConfig and colors.TabSelected or colors.Button end
+			end)
+			configButtons[name] = btn
+			if name == autoloadConfig then
+				create("ImageLabel", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -25, 0, 5), BackgroundTransparency = 1, Image = "rbxassetid://6026568194", ImageColor3 = colors.ToggleOn, Parent = btn})
+			end
+			y = y + 35
+		end
+	end
+	uiElements.configListFrame.CanvasSize = UDim2.new(0, 0, 0, y)
+end
+task.spawn(function() while task.wait(1) do if tabContents["Settings"] and tabContents["Settings"].Visible then refreshConfigList() end end end)
+
+uiElements.createConfigBtn.MouseButton1Click:Connect(function()
+	local name = uiElements.configNameBox.Text:gsub("[^%w_]", "_")
+	if name == "" then notify("Error", "Please enter a config name.", 5) return end
+	local filePath = "ZangetsuConfig/" .. name .. ".json"
+	if isfile(filePath) then notify("Error", "Config already exists.", 5) return end
+	pcall(function() writefile(filePath, serializeConfig()) notify("Config Created", "Config '" .. name .. "' created.", 5) refreshConfigList() end)
+end)
+uiElements.loadConfigBtn.MouseButton1Click:Connect(function()
+	if not selectedConfig then return end
+	local filePath = "ZangetsuConfig/" .. selectedConfig .. ".json"
+	if not isfile(filePath) then notify("Error", "Config not found.", 5) return end
+	pcall(function() applyConfig(readfile(filePath)) notify("Config Loaded", "Config '" .. selectedConfig .. "' loaded.", 5) end)
+end)
+uiElements.unsetAutoloadBtn.MouseButton1Click:Connect(function()
+	if not isfile("ZangetsuConfig/autoload.txt") then return end
+	pcall(function() delfile("ZangetsuConfig/autoload.txt") notify("Autoload Unset", "Autoload unset.", 5) refreshConfigList() end)
+end)
+uiElements.overwriteConfigBtn.MouseButton1Click:Connect(function()
+	if not selectedConfig then return end
+	local filePath = "ZangetsuConfig/" .. selectedConfig .. ".json"
+	if not isfile(filePath) then notify("Error", "Config not found.", 5) return end
+	pcall(function() writefile(filePath, serializeConfig()) notify("Config Overwritten", "Config '" .. selectedConfig .. "' overwritten.", 5) end)
+end)
+uiElements.deleteConfigBtn.MouseButton1Click:Connect(function()
+	if not selectedConfig then return end
+	local filePath = "ZangetsuConfig/" .. selectedConfig .. ".json"
+	if not isfile(filePath) then notify("Error", "Config not found.", 5) return end
+	pcall(function()
+		delfile(filePath)
+		if autoloadConfig == selectedConfig and isfile("ZangetsuConfig/autoload.txt") then delfile("ZangetsuConfig/autoload.txt") end
+		notify("Config Deleted", "Config '" .. selectedConfig .. "' deleted.", 5)
+		selectedConfig = nil
+		refreshConfigList()
+	end)
+end)
+uiElements.setAutoloadBtn.MouseButton1Click:Connect(function()
+	if not selectedConfig then return end
+	local filePath = "ZangetsuConfig/" .. selectedConfig .. ".json"
+	if not isfile(filePath) then notify("Error", "Config not found.", 5) return end
+	pcall(function() writefile("ZangetsuConfig/autoload.txt", selectedConfig) notify("Autoload Set", "Config '" .. selectedConfig .. "' set as autoload.", 5) refreshConfigList() end)
+end)
+uiElements.resetToDefaultsBtn.MouseButton1Click:Connect(function()
+	keybinds = {Menu = {Type = "Keyboard", Value = Enum.KeyCode.G}}
+	for name, btn in pairs(keybindButtons) do btn.Text = name == "Menu" and "G" or "None" end
+	for animType, tb in pairs(customAnimTextBoxes) do tb.Text = "" end
+
+	masterColors.Background = Color3.fromRGB(0, 0, 0)
+	masterColors.Accent = Color3.fromRGB(49, 49, 49)
+	masterColors.Interface = Color3.fromRGB(69, 32, 106)
+	colors.ESP = Color3.fromRGB(75, 0, 130)
+	updateGlobalColors() 
+	updateESPColor(colors.ESP) 
+
+	if sliderCallbacks["Saturation"] then sliderCallbacks["Saturation"][1](0) end
+	if sliderCallbacks["FOV"] then sliderCallbacks["FOV"][1](70) end
+	if toggleCallbacks["Infinite Zoom"] then toggleCallbacks["Infinite Zoom"][1](false) end
+	if toggleCallbacks["Click Teleport"] then toggleCallbacks["Click Teleport"][1](false) end
+
+	for name, callbacksTable in pairs(toggleCallbacks) do
+		if name ~= "Infinite Zoom" and name ~= "Click Teleport" and name ~= "Custom Speed" then
+			if toggleStates[name] ~= nil then callbacksTable[1](false) end
+		end
+	end
+	for name, callbacksTable in pairs(buttonCallbacks) do
+		if buttonStates[name] ~= nil then callbacksTable[1](false) end
+	end
+
+	speedValue = 300
+	flySpeedValue = 300
+	minDist = 1.5
+	maxDist = 4
+	headbangOscillationSpeed = 20
+	headbangHeightOffset = 1.38
+	if uiElements.speedValueInput then uiElements.speedValueInput.Text = tostring(speedValue) end
+	if uiElements.flySpeedValueInput then uiElements.flySpeedValueInput.Text = tostring(flySpeedValue) end
+	if uiElements.headbangMinDistInput then uiElements.headbangMinDistInput.Text = tostring(minDist) end
+	if uiElements.headbangMaxDistInput then uiElements.headbangMaxDistInput.Text = tostring(maxDist) end
+	if uiElements.headbangSpeedInput then uiElements.headbangSpeedInput.Text = tostring(headbangOscillationSpeed) end
+	if uiElements.headbangHeightOffsetInput then uiElements.headbangHeightOffsetInput.Text = tostring(headbangHeightOffset) end
+
+	if toggleCallbacks["Custom Speed"] then toggleCallbacks["Custom Speed"][1](false) end
+	if sliderCallbacks["Animation Speed"] then sliderCallbacks["Animation Speed"][1](1) end
+	if sliderCallbacks["Transparency"] then sliderCallbacks["Transparency"][1](0.1) end
+	notify("Settings", "All settings reset to default.", 3)
+end)
+
+-- Color Picker Helper Functions
+local function toHex(c3)
+	return string.format("#%02X%02X%02X", math.floor(c3.R * 255), math.floor(c3.G * 255), math.floor(c3.B * 255))
+end
+
+local function fromHex(hex)
+	hex = hex:gsub("#", "")
+	if #hex ~= 6 then return nil end
+	local r, g, b = hex:match("(%x%x)(%x%x)(%x%x)")
+	if not r or not g or not b then return nil end
+	return Color3.fromRGB(tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+end
+
+-- Color Picker
+local hexInputTextBox
+uiElements.colorPickerFrame = create("Frame", {Size = UDim2.new(0, 180, 0, 165), Position = UDim2.new(0.5, -90, 0.5, -(165/2)), BackgroundColor3 = colors.Background, Visible = false, Parent = gui})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.colorPickerFrame})
+uiElements.colorPickerDragBar = create("Frame", {Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = colors.Header, Parent = uiElements.colorPickerFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = uiElements.colorPickerDragBar})
+create("TextLabel", {Size = UDim2.new(0.8, 0, 1, 0), Position = UDim2.new(0.1, 0, 0, 0), BackgroundTransparency = 1, Text = "Color Picker", TextColor3 = colors.Text, TextSize = 14, Font = Enum.Font.FredokaOne, TextXAlignment = Enum.TextXAlignment.Center, Parent = uiElements.colorPickerDragBar})
+local colorPickerCloseButton = create("TextButton", {Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(1, -24, 0, 2), BackgroundColor3 = colors.Button, Text = "X", TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = uiElements.colorPickerDragBar})
+create("UICorner", {CornerRadius = UDim.new(0, 10), Parent = colorPickerCloseButton})
+colorPickerCloseButton.MouseButton1Click:Connect(function() uiElements.colorPickerFrame.Visible = false end)
+local colorPreview = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, 96), BackgroundColor3 = colors.ESP, Parent = uiElements.colorPickerFrame})
+create("UICorner", {CornerRadius = UDim.new(0, 4), Parent = colorPreview})
+
+local hueFill, saturationFill, valueFill
+local currentColorPickerTargetKey = "ESP" -- Default or last used
+
+local function createColorSlider(label, y, callback)
+	local sliderFrame = create("Frame", {Size = UDim2.new(0, 160, 0, 16), Position = UDim2.new(0, 10, 0, y), BackgroundColor3 = colors.Button, Parent = uiElements.colorPickerFrame})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = sliderFrame})
+	local fill = create("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = colors.Interface, Parent = sliderFrame})
+	create("UICorner", {CornerRadius = UDim.new(0, 8), Parent = fill})
+	create("TextLabel", {Size = UDim2.new(0, 20, 1, 0), Position = UDim2.new(-0.15, 0, 0, 0), BackgroundTransparency = 1, Text = label, TextColor3 = colors.Text, TextSize = 12, Font = Enum.Font.FredokaOne, Parent = sliderFrame})
+	local dragging = false
+	sliderFrame.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end end)
+	UserInputService.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+			local p = math.clamp((input.Position.X - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X, 0, 1)
+			fill.Size = UDim2.new(p, 0, 1, 0)
+			callback(p)
+		end
+	end)
+	return fill, sliderFrame 
+end
+
+local colorSliderCallback = function(p_val, slider_type)
+	local h, s, v
+	local targetColor
+	if currentColorPickerTargetKey == "ESP" then targetColor = colors.ESP
+	elseif currentColorPickerTargetKey == "UI_Background" then targetColor = masterColors.Background
+	elseif currentColorPickerTargetKey == "UI_Accent" then targetColor = masterColors.Accent
+	elseif currentColorPickerTargetKey == "UI_Interface" then targetColor = masterColors.Interface
+	else return
+	end
+
+	h, s, v = targetColor:ToHSV()
+
+	if slider_type == "H" then h = p_val
+	elseif slider_type == "S" then s = p_val
+	elseif slider_type == "V" then v = p_val
+	end
+
+	local newColor = Color3.fromHSV(h, s, v)
+	colorPreview.BackgroundColor3 = newColor
+	if hexInputTextBox then hexInputTextBox.Text = toHex(newColor) end
+
+	if currentColorPickerTargetKey == "ESP" then
+		colors.ESP = newColor
+		updateESPColor(newColor)
+	elseif currentColorPickerTargetKey == "UI_Background" then
+		masterColors.Background = newColor
+		updateGlobalColors()
+	elseif currentColorPickerTargetKey == "UI_Accent" then
+		masterColors.Accent = newColor
+		updateGlobalColors()
+	elseif currentColorPickerTargetKey == "UI_Interface" then
+		masterColors.Interface = newColor
+		updateGlobalColors()
+	end
+end
+
+hueFill, uiElements.colorPickerHueTrack = createColorSlider("H", 30, function(v_val) colorSliderCallback(v_val, "H") end)
+saturationFill, uiElements.colorPickerSatTrack = createColorSlider("S", 52, function(v_val) colorSliderCallback(v_val, "S") end)
+valueFill, uiElements.colorPickerValTrack = createColorSlider("V", 74, function(v_val) colorSliderCallback(v_val, "V") end)
+
+hexInputTextBox = create("TextBox", {
+	Size = UDim2.new(1, -20, 0, 25),
+	Position = UDim2.new(0, 10, 0, 118),
+	BackgroundColor3 = colors.Button,
+	TextColor3 = colors.Text,
+	Text = "#FFFFFF",
+	PlaceholderText = "Hex Code",
+	Font = Enum.Font.FredokaOne,
+	TextSize = 12,
+	ClearTextOnFocus = false,
+	Parent = uiElements.colorPickerFrame
+})
+create("UICorner", {CornerRadius = UDim.new(0, 6), Parent = hexInputTextBox})
+uiElements.hexInputTextBoxRef = hexInputTextBox
+
+hexInputTextBox.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		local newColor = fromHex(hexInputTextBox.Text)
+		if newColor then
+			local h, s, v = newColor:ToHSV()
+			hueFill.Size = UDim2.new(h, 0, 1, 0)
+			saturationFill.Size = UDim2.new(s, 0, 1, 0)
+			valueFill.Size = UDim2.new(v, 0, 1, 0)
+			colorPreview.BackgroundColor3 = newColor
+
+			if currentColorPickerTargetKey == "ESP" then
+				colors.ESP = newColor
+				updateESPColor(newColor)
+			elseif currentColorPickerTargetKey == "UI_Background" then
+				masterColors.Background = newColor
+				updateGlobalColors()
+			elseif currentColorPickerTargetKey == "UI_Accent" then
+				masterColors.Accent = newColor
+				updateGlobalColors()
+			elseif currentColorPickerTargetKey == "UI_Interface" then
+				masterColors.Interface = newColor
+				updateGlobalColors()
+			end
+		else
+			local targetColor
+			if currentColorPickerTargetKey == "ESP" then targetColor = colors.ESP
+			elseif currentColorPickerTargetKey == "UI_Background" then targetColor = masterColors.Background
+			elseif currentColorPickerTargetKey == "UI_Accent" then targetColor = masterColors.Accent
+			elseif currentColorPickerTargetKey == "UI_Interface" then targetColor = masterColors.Interface
+			end
+			if targetColor then hexInputTextBox.Text = toHex(targetColor) end
+		end
+	else 
+		local targetColor
+		if currentColorPickerTargetKey == "ESP" then targetColor = colors.ESP
+		elseif currentColorPickerTargetKey == "UI_Background" then targetColor = masterColors.Background
+		elseif currentColorPickerTargetKey == "UI_Accent" then targetColor = masterColors.Accent
+		elseif currentColorPickerTargetKey == "UI_Interface" then targetColor = masterColors.Interface
+		end
+		if targetColor then hexInputTextBox.Text = toHex(targetColor) end
+	end
+end)
+
+
+function openColorPicker(targetKey)
+	currentColorPickerTargetKey = targetKey
+	uiElements.colorPickerFrame.Visible = not uiElements.colorPickerFrame.Visible
+	if uiElements.colorPickerFrame.Visible then
+		local h, s, v
+		local initialColor
+		if targetKey == "ESP" then initialColor = colors.ESP
+		elseif targetKey == "UI_Background" then initialColor = masterColors.Background
+		elseif targetKey == "UI_Accent" then initialColor = masterColors.Accent
+		elseif targetKey == "UI_Interface" then initialColor = masterColors.Interface
+		else return
+		end
+		h, s, v = initialColor:ToHSV()
+
+		hueFill.Size = UDim2.new(h, 0, 1, 0)
+		saturationFill.Size = UDim2.new(s, 0, 1, 0)
+		valueFill.Size = UDim2.new(v, 0, 1, 0)
+		colorPreview.BackgroundColor3 = initialColor
+		if hexInputTextBox then hexInputTextBox.Text = toHex(initialColor) end
+
+		uiElements.colorPickerFrame.BackgroundColor3 = colors.Background
+		uiElements.colorPickerDragBar.BackgroundColor3 = colors.Header 
+		colorPickerCloseButton.BackgroundColor3 = colors.Button 
+		if uiElements.colorPickerHueTrack then uiElements.colorPickerHueTrack.BackgroundColor3 = colors.Button end
+		if uiElements.colorPickerSatTrack then uiElements.colorPickerSatTrack.BackgroundColor3 = colors.Button end
+		if uiElements.colorPickerValTrack then uiElements.colorPickerValTrack.BackgroundColor3 = colors.Button end
+		if hueFill then hueFill.BackgroundColor3 = colors.Interface end
+		if saturationFill then saturationFill.BackgroundColor3 = colors.Interface end
+		if valueFill then valueFill.BackgroundColor3 = colors.Interface end
+		if uiElements.hexInputTextBoxRef then uiElements.hexInputTextBoxRef.BackgroundColor3 = colors.Button end
+	end
+end
+if uiElements.espColorBtnRef then uiElements.espColorBtnRef.MouseButton1Click:Connect(function() openColorPicker("ESP") end) end
+
+
+local draggingColorPicker = false
+local dragStartPosColorPicker = nil
+local startFramePosColorPicker = nil
+
+uiElements.colorPickerDragBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		draggingColorPicker = true
+		dragStartPosColorPicker = input.Position
+		startFramePosColorPicker = uiElements.colorPickerFrame.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if draggingColorPicker and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStartPosColorPicker
+		uiElements.colorPickerFrame.Position = UDim2.new(startFramePosColorPicker.X.Scale, startFramePosColorPicker.X.Offset + delta.X, startFramePosColorPicker.Y.Scale, startFramePosColorPicker.Y.Offset + delta.Y)
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then draggingColorPicker = false end
+end)
+
+
+function updateGlobalColors()
+	colors.Background = masterColors.Background
+	colors.Accent = masterColors.Accent
+	colors.Interface = masterColors.Interface
+
+	colors.Header = colors.Accent
+	colors.Button = colors.Accent
+	colors.ToggleOff = colors.Accent
+	colors.TabUnselected = colors.Accent
+	colors.Outline = Color3.new(colors.Accent.R*0.8, colors.Accent.G*0.8, colors.Accent.B*0.8) 
+	colors.KeybindsBG = colors.Background
+	colors.ToggleOn = colors.Interface
+	colors.TabSelected = colors.Interface
+
+	if uiElements.mainFrame then uiElements.mainFrame.BackgroundColor3 = colors.Background end
+	if uiElements.header then uiElements.header.BackgroundColor3 = colors.Header end
+	if uiElements.keybindsFrame then
+		uiElements.keybindsFrame.BackgroundColor3 = colors.KeybindsBG
+		if uiElements.keybindsFrameGradient then 
+			uiElements.keybindsFrameGradient.Color = ColorSequence.new(Color3.fromRGB(20, 20, 40), Color3.fromRGB(50, 50, 80))
+		end
+	end
+	if uiElements.mainFrameGradient then uiElements.mainFrameGradient.Color = ColorSequence.new(Color3.fromRGB(20,20,40), Color3.fromRGB(50,50,80)) end 
+
+	if uiElements.configListFrame then uiElements.configListFrame.BackgroundColor3 = Color3.fromRGB(25,25,25) end
+
+	if uiElements.colorPickerFrame then uiElements.colorPickerFrame.BackgroundColor3 = colors.Background end
+	if uiElements.colorPickerDragBar then uiElements.colorPickerDragBar.BackgroundColor3 = colors.Header end
+	if colorPickerCloseButton then colorPickerCloseButton.BackgroundColor3 = colors.Button end
+	if uiElements.colorPickerHueTrack then uiElements.colorPickerHueTrack.BackgroundColor3 = colors.Button end
+	if uiElements.colorPickerSatTrack then uiElements.colorPickerSatTrack.BackgroundColor3 = colors.Button end
+	if uiElements.colorPickerValTrack then uiElements.colorPickerValTrack.BackgroundColor3 = colors.Button end
+	if hueFill then hueFill.BackgroundColor3 = colors.Interface end
+	if saturationFill then saturationFill.BackgroundColor3 = colors.Interface end
+	if valueFill then valueFill.BackgroundColor3 = colors.Interface end
+	if uiElements.hexInputTextBoxRef then uiElements.hexInputTextBoxRef.BackgroundColor3 = colors.Button end
+
+
+	for name, state in pairs(toggleStates) do if toggleCallbacks[name] and toggleCallbacks[name][1] then toggleCallbacks[name][1](state) end end
+	for name, val in pairs(sliderValues) do if sliderCallbacks[name] and sliderCallbacks[name][1] then sliderCallbacks[name][1](val) end end
+	for name, state in pairs(buttonStates) do if buttonCallbacks[name] and buttonCallbacks[name][1] then buttonCallbacks[name][1](state) end end
+
+	for tName, tBtn in pairs(uiElements.tabs) do
+		tBtn.BackgroundColor3 = (tabContents[tName] and tabContents[tName].Visible) and colors.TabSelected or colors.TabUnselected
+	end
+
+	local actionButtons = {
+		uiElements.createConfigBtn, uiElements.loadConfigBtn, uiElements.overwriteConfigBtn,
+		uiElements.deleteConfigBtn, uiElements.unsetAutoloadBtn, uiElements.setAutoloadBtn,
+		uiElements.resetToDefaultsBtn, uiElements.rejoinBtn, uiElements.serverHopBtn, uiElements.jerkBtn,
+		uiElements.tpToTargetBtn, uiElements.findNearestBtn, uiElements.randomTargetBtn,
+		uiElements.applyCustomAnimsBtn, uiElements.resetAnimsBtn, uiElements.loadAnimationBtn, uiElements.emoteBtn,
+		uiElements.bgColorPickerButton, uiElements.accentColorPickerButton, uiElements.interfaceColorPickerButton
+	}
+	for _, btn in pairs(actionButtons) do if btn then btn.BackgroundColor3 = colors.Button end end
+
+	if uiElements.loadAnimationBtn and loadAllToggle then uiElements.loadAnimationBtn.BackgroundColor3 = colors.Interface end 
+
+	local textboxesToUpdate = {
+		uiElements.configNameBox, uiElements.speedValueInput, uiElements.flySpeedValueInput,
+		uiElements.headbangHeightOffsetInput, uiElements.headbangMinDistInput,
+		uiElements.headbangMaxDistInput, uiElements.headbangSpeedInput,
+		uiElements.targetInputRef
+	}
+	for _, tb in pairs(textboxesToUpdate) do if tb then tb.BackgroundColor3 = colors.Button end end
+	for _, tb in pairs(uiElements.customAnimTextBoxesRefs) do if tb then tb.BackgroundColor3 = colors.Button end end
+
+	for _, kbBtn in pairs(keybindButtons) do
+		if kbBtn.Text ~= "Press..." then kbBtn.BackgroundColor3 = colors.Button
+		else kbBtn.BackgroundColor3 = colors.Interface 
+		end
+	end
+
+	if uiElements.espColorBtnRef then uiElements.espColorBtnRef.BackgroundColor3 = colors.ESP end
+
+	if uiElements.fovConeToggleButtonRef then
+		uiElements.fovConeToggleButtonRef.BackgroundColor3 = showFOVCone and colors.ToggleOn or colors.Button
+	end
+
+	if fovCone then fovCone.BackgroundColor3 = colors.Outline end
+end
+
+
+-- Autoload Check & Initial Color Update
+if isfile("ZangetsuConfig/autoload.txt") then
+	local autoloadName = readfile("ZangetsuConfig/autoload.txt")
+	local filePath = "ZangetsuConfig/" .. autoloadName .. ".json"
+	if isfile(filePath) then
+		applyConfig(readfile(filePath)) 
+		if autoloadLabel then autoloadLabel.Text = "Current autoload config: " .. autoloadName end
+	else
+		if autoloadLabel then autoloadLabel.Text = "Current autoload config: none (file missing)" end
+		updateGlobalColors() 
+	end
+else
+	updateGlobalColors() 
+end
+
+
+if tabs["Visuals"] then tabs["Visuals"].BackgroundColor3 = colors.TabSelected end
+if tabContents["Visuals"] then tabContents["Visuals"].Visible = true end
+
+
+-- Helper Functions for Keybinds
+function isKeybindPressed(keybind, input)
+	if not keybind then return false end
+	if keybind.Type == "Keyboard" and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keybind.Value then return true
+	elseif keybind.Type == "MouseButton" and input.UserInputType == keybind.Value then return true end
+	return false
+end
+
+function isKeybindDown(keybind)
+	if not keybind then return false end
+	if keybind.Type == "Keyboard" then return UserInputService:IsKeyDown(keybind.Value)
+	elseif keybind.Type == "MouseButton" then return UserInputService:IsMouseButtonPressed(keybind.Value) end
+	return false
+end
+
+-- Main Loop
+RunService.RenderStepped:Connect(function(dt)
+	if not character or not rootPart or not humanoid then return end
+	local currentCameraCFrame = camera.CFrame
+	if viewActive then camera.CameraType = Enum.CameraType.Follow return end
+
+	if aimlockActive then
+		local targetPart = lockedTarget or getTargetInFOV()
+		if targetPart then
+			if aimlockToggleMode then if aimlockLocked then lockedTarget = targetPart else lockedTarget = nil end else lockedTarget = isKeybindDown(keybinds.Aimlock) and targetPart or nil end
+			if lockedTarget then
+				local targetPosition = predictionActive and predictTargetPosition(lockedTarget, dt) or lockedTarget.Position
+				camera.CFrame = CFrame.new(currentCameraCFrame.Position, targetPosition)
+			end
+		else
+			if not aimlockToggleMode then lockedTarget = nil end
+		end
+	end
+	if showFOVCone and fovCone then fovCone.Position = UDim2.new(0.5, -aimlockFOV, 0.5, -aimlockFOV) end
+	if speedActive then
+		local movementDirection = getMovement(currentCameraCFrame, false)
+		if movementDirection.Magnitude > 0 then
+			local horizontalMovement = Vector3.new(movementDirection.X, 0, movementDirection.Z).Unit * speedValue * dt
+			rootPart.CFrame = CFrame.new(rootPart.Position + horizontalMovement) * rootPart.CFrame.Rotation
+		end
+	end
+	if flyActive and bodyVelocity and bodyGyro then
+		local movementDirection = getMovement(currentCameraCFrame, true)
+		bodyVelocity.Velocity = movementDirection.Magnitude > 0 and movementDirection.Unit * flySpeedValue or Vector3.new()
+		bodyGyro.CFrame = currentCameraCFrame
+	end
+	if timeLocked then Lighting.ClockTime = sliderValues["Time"] or originalSettings.ClockTime end
+	if customAnimSpeedEnabled then
+		for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do track:AdjustSpeed(animationSpeedMultiplier) end
+	else
+		for _, track in pairs(humanoid:GetPlayingAnimationTracks()) do if track.Speed ~= 1 then track:AdjustSpeed(1) end end
+	end
+end)
+
+-- Infinite Jump
+UserInputService.JumpRequest:Connect(function() if infiniteJumpEnabled and character and humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Jumping then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end end)
+
+-- Character Update
+function updateCharacter(newCharacter)
+	if not newCharacter then return end
+	character = newCharacter
+	rootPart = character:WaitForChild("HumanoidRootPart", 3)
+	humanoid = character:WaitForChild("Humanoid", 3)
+	if not rootPart or not humanoid then return end
+
+	task.wait(0.5)
+	local Animate = character:FindFirstChild("Animate")
+	if Animate then
+		local function getAnimId(folderName, animName, fallbackClassName)
+			local folder = Animate:FindFirstChild(folderName)
+			if folder then
+				local anim = folder:FindFirstChild(animName)
+				if not anim and fallbackClassName then anim = folder:FindFirstChildOfClass(fallbackClassName) end
+				if anim and anim:IsA("Animation") then return anim.AnimationId end
+			end
+			return nil
+		end
+		defaultAnimations["Idle"] = getAnimId("idle", "Animation1")
+		defaultAnimations["Walk"] = getAnimId("walk", "WalkAnim")
+		defaultAnimations["Run"] = getAnimId("run", "RunAnim")
+		defaultAnimations["Jump"] = getAnimId("jump", "JumpAnim")
+		defaultAnimations["Fall"] = getAnimId("fall", "FallAnim")
+		defaultAnimations["Climb"] = getAnimId("climb", "ClimbAnim")
+		defaultAnimations["Swim"] = getAnimId("swim", "SwimAnim", "Animation")
+	end
+
+	if flyActive then
+		humanoid.PlatformStand = true
+		if bodyVelocity then bodyVelocity:Destroy() end; if bodyGyro then bodyGyro:Destroy() end
+		bodyVelocity = Instance.new("BodyVelocity", rootPart)
+		bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bodyVelocity.Velocity = Vector3.new()
+		bodyGyro = Instance.new("BodyGyro", rootPart)
+		bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		bodyGyro.P = 20000; bodyGyro.D = 100
+	end
+	if espActive then updateESP() end
+	if isHeadbangActive then stopHeadbang() end
+	if headsitActive and buttonCallbacks["Headsit"] then buttonCallbacks["Headsit"][1](false) end
+	if backpackActive and buttonCallbacks["Backpack"] then buttonCallbacks["Backpack"][1](false) end
+end
+player.CharacterAdded:Connect(updateCharacter)
+if player.Character then updateCharacter(player.Character) end
+
+-- GUI Dragging
+local draggingMainGUI = false
+local dragStartPosMainGUI = nil
+local startFramePosMainGUI = nil
+
+header.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then
+		draggingMainGUI = true
+		dragStartPosMainGUI = i.Position
+		startFramePosMainGUI = mainFrame.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(i)
+	if draggingMainGUI and i.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = i.Position - dragStartPosMainGUI
+		mainFrame.Position = UDim2.new(startFramePosMainGUI.X.Scale, startFramePosMainGUI.X.Offset + delta.X, startFramePosMainGUI.Y.Scale, startFramePosMainGUI.Y.Offset + delta.Y)
+	end
+end)
+UserInputService.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then draggingMainGUI = false end
+end)
+
+-- Menu Toggle and Keybinds
+local clickTeleportKeyHeld = false
+
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+	if gameProcessedEvent or (currentlyBindingKeyFor and keybindButtons[currentlyBindingKeyFor] and keybindButtons[currentlyBindingKeyFor].Text == "Press...") then return end
+
+	if lastBoundInputObject == input then
+		lastBoundInputObject = nil
+		return
+	end
+
+	if isKeybindPressed(keybinds.Menu, input) then
+		if mainFrame.Visible then closeMenu() else openMenu() end
+	elseif isKeybindPressed(keybinds.Aimlock, input) and aimlockToggleMode then
+		aimlockLocked = not aimlockLocked
+		lockedTarget = aimlockLocked and getTargetInFOV() or nil
+	elseif isKeybindPressed(keybinds.ESP, input) and espToggleUpdateFn then
+		espToggleUpdateFn(not espActive)
+	elseif isKeybindPressed(keybinds.Fly, input) and flyToggleUpdateFn then
+		flyToggleUpdateFn(not flyActive)
+	elseif isKeybindPressed(keybinds.Speed, input) and speedToggleUpdateFn then
+		speedToggleUpdateFn(not speedActive)
+	elseif isKeybindPressed(keybinds.Headbang, input) then
+		if headbangEnabled then
+			if isHeadbangActive then
+				stopHeadbang()
+			else
+				startHeadbang()
+			end
+		end
+	elseif isKeybindPressed(keybinds.ClickTeleport, input) then
+		if clickTeleportActive then
+			if input.UserInputType == Enum.UserInputType.Keyboard then
+				clickTeleportKeyHeld = true
+			elseif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 or input.UserInputType == Enum.UserInputType.MouseButton3 then
+				if gameProcessedEvent then return end -- Explicit check before teleport
+				local mouse = player:GetMouse()
+				local hit = mouse.Hit
+				if hit and rootPart then
+					rootPart.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+				end
+			end
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if keybinds.ClickTeleport and keybinds.ClickTeleport.Type == "Keyboard" and input.KeyCode == keybinds.ClickTeleport.Value then
+		clickTeleportKeyHeld = false
+	end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+	if (currentlyBindingKeyFor and keybindButtons[currentlyBindingKeyFor] and keybindButtons[currentlyBindingKeyFor].Text == "Press...") then return end
+	if lastBoundInputObject == input then return end
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 and clickTeleportActive and clickTeleportKeyHeld then
+		if gameProcessedEvent then return end -- Explicit check before teleport
+		local mouse = player:GetMouse()
+		local hit = mouse.Hit
+		if hit and rootPart then
+			rootPart.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+		end
+	end
+end)
+
+notify("Zangetsu", "Loaded successfully!", 3)
